@@ -1,8 +1,8 @@
 
-LINUX_VERSION = 5.3
+LINUX_VERSION = 6.1.8
 
 KERNEL_VERSION  = linux-$(LINUX_VERSION)
-KERNEL_DOWNLOAD = https://cdn.kernel.org/pub/linux/kernel/v5.x/$(KERNEL_VERSION)
+KERNEL_DOWNLOAD = https://cdn.kernel.org/pub/linux/kernel/v6.x/$(KERNEL_VERSION)
 
 PWD	= $(shell pwd)
 NPROC	= $(shell nproc)
@@ -50,7 +50,7 @@ $(PH_LINUX_VER): $(KERNEL_BUILD_OUTPUT)
 	ln -s $(PWD)/$(PH_LINUX_VER) $(PH_LINUX)
 
 $(KERNEL_BUILD_OUTPUT): $(KERNEL_BUILD_PATH)
-	cd $(KERNEL_VERSION); make -j$(NPROC)
+	cd $(KERNEL_VERSION); make -j$(NPROC) vmlinux
 
 clean:
 	rm -rf $(KERNEL_BUILD_PATH) $(SHA256_SENTINEL) $(PH_LINUX_VER) $(PH_LINUX) .work

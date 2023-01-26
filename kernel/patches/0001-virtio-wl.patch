@@ -1,33 +1,31 @@
-diff -uprN linux-5.3/drivers/virtio/Kconfig linux-5.3-wl/drivers/virtio/Kconfig
---- linux-5.3/drivers/virtio/Kconfig	2019-09-15 17:19:32.000000000 -0400
-+++ linux-5.3-wl/drivers/virtio/Kconfig	2019-09-19 23:04:23.616276643 -0400
-@@ -74,6 +74,14 @@ config VIRTIO_INPUT
- 
- 	 If unsure, say M.
+diff -uprN linux-6.0.12/drivers/virtio/Kconfig linux-6.0.12-wl/drivers/virtio/Kconfig
+--- linux-6.0.12/drivers/virtio/Kconfig	2022-12-08 05:30:22.000000000 -0500
++++ linux-6.0.12-wl/drivers/virtio/Kconfig	2022-12-30 13:24:24.416282173 -0500
+@@ -173,4 +173,12 @@ config VIRTIO_DMA_SHARED_BUFFER
+ 	 This option adds a flavor of dma buffers that are backed by
+ 	 virtio resources.
  
 +config VIRTIO_WL
 +	bool "Virtio Wayland driver"
-+	depends on VIRTIO
-+	---help---
++	depends on VIRTIO && MMU
++	help
 +	 This driver supports proxying of a wayland socket from host to guest.
 +
 +	 If unsure, say 'N'.
 +
- config VIRTIO_MMIO
- 	tristate "Platform bus driver for memory mapped virtio devices"
- 	depends on HAS_IOMEM && HAS_DMA
-diff -uprN linux-5.3/drivers/virtio/Makefile linux-5.3-wl/drivers/virtio/Makefile
---- linux-5.3/drivers/virtio/Makefile	2019-09-15 17:19:32.000000000 -0400
-+++ linux-5.3-wl/drivers/virtio/Makefile	2019-09-19 23:01:36.338268667 -0400
-@@ -6,3 +6,4 @@ virtio_pci-y := virtio_pci_modern.o virt
- virtio_pci-$(CONFIG_VIRTIO_PCI_LEGACY) += virtio_pci_legacy.o
- obj-$(CONFIG_VIRTIO_BALLOON) += virtio_balloon.o
- obj-$(CONFIG_VIRTIO_INPUT) += virtio_input.o
+ endif # VIRTIO_MENU
+diff -uprN linux-6.0.12/drivers/virtio/Makefile linux-6.0.12-wl/drivers/virtio/Makefile
+--- linux-6.0.12/drivers/virtio/Makefile	2022-12-08 05:30:22.000000000 -0500
++++ linux-6.0.12-wl/drivers/virtio/Makefile	2022-12-30 13:25:03.886404257 -0500
+@@ -12,3 +12,4 @@ obj-$(CONFIG_VIRTIO_INPUT) += virtio_inp
+ obj-$(CONFIG_VIRTIO_VDPA) += virtio_vdpa.o
+ obj-$(CONFIG_VIRTIO_MEM) += virtio_mem.o
+ obj-$(CONFIG_VIRTIO_DMA_SHARED_BUFFER) += virtio_dma_buf.o
 +obj-$(CONFIG_VIRTIO_WL) += virtio_wl.o
-diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virtio_wl.c
---- linux-5.3/drivers/virtio/virtio_wl.c	1969-12-31 19:00:00.000000000 -0500
-+++ linux-5.3-wl/drivers/virtio/virtio_wl.c	2019-09-19 23:08:03.337287120 -0400
-@@ -0,0 +1,1482 @@
+diff -uprN linux-6.0.12/drivers/virtio/virtio_wl.c linux-6.0.12-wl/drivers/virtio/virtio_wl.c
+--- linux-6.0.12/drivers/virtio/virtio_wl.c	1969-12-31 19:00:00.000000000 -0500
++++ linux-6.0.12-wl/drivers/virtio/virtio_wl.c	2022-12-30 13:15:37.000000000 -0500
+@@ -0,0 +1,1598 @@
 +/*
 + *  Wayland Virtio Driver
 + *  Copyright (C) 2017 Google, Inc.
@@ -87,13 +85,15 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +#include <linux/syscalls.h>
 +#include <linux/uaccess.h>
 +#include <linux/virtio.h>
++#include <linux/virtio_dma_buf.h>
 +#include <linux/virtio_wl.h>
++#include <linux/vmalloc.h>
 +
-+#include <drm/virtio_drm.h>
 +#include <uapi/linux/dma-buf.h>
 +
 +#ifdef CONFIG_DRM_VIRTIO_GPU
 +#define SEND_VIRTGPU_RESOURCES
++#include <linux/sync_file.h>
 +#endif
 +
 +#define VFD_ILLEGAL_SIGN_BIT 0x80000000
@@ -137,6 +137,8 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +
 +	struct mutex vfds_lock;
 +	struct idr vfds;
++
++	bool use_send_vfd_v2;
 +};
 +
 +static struct virtwl_vfd *virtwl_vfd_alloc(struct virtwl_info *vi);
@@ -736,27 +738,77 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +}
 +
 +#ifdef SEND_VIRTGPU_RESOURCES
++static int get_dma_buf_id(struct dma_buf *dma_buf, u32 *id)
++{
++	uuid_t uuid;
++	int ret = 0;
++
++	ret = virtio_dma_buf_get_uuid(dma_buf, &uuid);
++	*id = be32_to_cpu(*(__be32 *)(uuid.b + 12));
++
++	return ret;
++}
++
++static int encode_fence(struct dma_fence *fence,
++			struct virtio_wl_ctrl_vfd_send_vfd_v2 *vfd_id)
++{
++	const char *name = fence->ops->get_driver_name(fence);
++
++	// We only support virtgpu based fences. Since all virtgpu fences are
++	// in the same context, merging sync_files will always reduce to a
++	// single virtgpu fence.
++	if (strcmp(name, "virtio_gpu") != 0)
++		return -EBADFD;
++
++	if (dma_fence_is_signaled(fence)) {
++		vfd_id->kind =
++			VIRTIO_WL_CTRL_VFD_SEND_KIND_VIRTGPU_SIGNALED_FENCE;
++	} else {
++		vfd_id->kind = VIRTIO_WL_CTRL_VFD_SEND_KIND_VIRTGPU_FENCE;
++		vfd_id->seqno = cpu_to_le32(fence->seqno);
++	}
++	return 0;
++}
++
 +static int encode_vfd_ids_foreign(struct virtwl_vfd **vfds,
 +				  struct dma_buf **virtgpu_dma_bufs,
++				  struct dma_fence **virtgpu_dma_fence,
 +				  size_t vfd_count,
-+				  struct virtio_wl_ctrl_vfd_send_vfd *vfd_ids)
++				  struct virtio_wl_ctrl_vfd_send_vfd *ids,
++				  struct virtio_wl_ctrl_vfd_send_vfd_v2 *ids_v2)
 +{
 +	size_t i;
 +	int ret;
 +
 +	for (i = 0; i < vfd_count; i++) {
++		uint32_t kind = UINT_MAX;
++		uint32_t id = 0;
++
 +		if (vfds[i]) {
-+			vfd_ids[i].kind = VIRTIO_WL_CTRL_VFD_SEND_KIND_LOCAL;
-+			vfd_ids[i].id = cpu_to_le32(vfds[i]->id);
++			kind = VIRTIO_WL_CTRL_VFD_SEND_KIND_LOCAL;
++			id = vfds[i]->id;
 +		} else if (virtgpu_dma_bufs[i]) {
-+			ret = virtio_gpu_dma_buf_to_handle(virtgpu_dma_bufs[i],
-+							   false,
-+							   &vfd_ids[i].id);
++			ret = get_dma_buf_id(virtgpu_dma_bufs[i],
++					     &id);
 +			if (ret)
 +				return ret;
-+			vfd_ids[i].kind = VIRTIO_WL_CTRL_VFD_SEND_KIND_VIRTGPU;
++			kind = VIRTIO_WL_CTRL_VFD_SEND_KIND_VIRTGPU;
++		} else if (virtgpu_dma_fence[i]) {
++			ret = encode_fence(virtgpu_dma_fence[i],
++					   ids_v2 + i);
++			if (ret)
++				return ret;
 +		} else {
 +			return -EBADFD;
++		}
++		if (kind != UINT_MAX) {
++			if (ids) {
++				ids[i].kind = kind;
++				ids[i].id = cpu_to_le32(id);
++			} else {
++				ids_v2[i].kind = kind;
++				ids_v2[i].id = cpu_to_le32(id);
++			}
 +		}
 +	}
 +	return 0;
@@ -772,6 +824,7 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +	struct virtwl_vfd *vfds[VIRTWL_SEND_MAX_ALLOCS] = { 0 };
 +#ifdef SEND_VIRTGPU_RESOURCES
 +	struct dma_buf *virtgpu_dma_bufs[VIRTWL_SEND_MAX_ALLOCS] = { 0 };
++	struct dma_fence *virtgpu_dma_fence[VIRTWL_SEND_MAX_ALLOCS] = { 0 };
 +	bool foreign_id = false;
 +#endif
 +	size_t vfd_count = 0;
@@ -783,6 +836,9 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +	struct completion finish_completion;
 +	struct scatterlist out_sg;
 +	struct scatterlist in_sg;
++	struct sg_table sgt;
++	struct vm_struct *area;
++	bool vmalloced;
 +	int ret;
 +	int i;
 +
@@ -813,19 +869,33 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +				goto put_files;
 +			} else {
 +				struct dma_buf *dma_buf = ERR_PTR(-EINVAL);
++				struct dma_fence *dma_fence = ERR_PTR(-EINVAL);
++				bool handled = false;
++
 +#ifdef SEND_VIRTGPU_RESOURCES
 +				dma_buf = dma_buf_get(vfd_fds[i]);
++				dma_fence = vi->use_send_vfd_v2
++					? sync_file_get_fence(vfd_fds[i])
++					: ERR_PTR(-EINVAL);
++				handled = !IS_ERR(dma_buf) ||
++					  !IS_ERR(dma_fence);
++
 +				if (!IS_ERR(dma_buf)) {
-+					fdput(vfd_file);
 +					virtgpu_dma_bufs[i] = dma_buf;
-+					foreign_id = true;
-+					vfd_count++;
-+					continue;
++				} else {
++					virtgpu_dma_fence[i] = dma_fence;
 +				}
++
++				foreign_id = true;
++				vfd_count++;
 +#endif
 +				fdput(vfd_file);
-+				ret = PTR_ERR(dma_buf);
-+				goto put_files;
++				if (!handled) {
++					ret = IS_ERR(dma_buf) ?
++						PTR_ERR(dma_buf) :
++						PTR_ERR(dma_fence);
++					goto put_files;
++				}
 +			}
 +		}
 +	}
@@ -837,12 +907,19 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +	vfd_ids_size = vfd_count * sizeof(__le32);
 +#ifdef SEND_VIRTGPU_RESOURCES
 +	if (foreign_id) {
-+		vfd_ids_size = vfd_count *
-+			       sizeof(struct virtio_wl_ctrl_vfd_send_vfd);
++		vfd_ids_size = vfd_count * (vi->use_send_vfd_v2
++			? sizeof(struct virtio_wl_ctrl_vfd_send_vfd_v2)
++			: sizeof(struct virtio_wl_ctrl_vfd_send_vfd));
 +	}
 +#endif
 +	ctrl_send_size = sizeof(*ctrl_send) + vfd_ids_size + len;
-+	ctrl_send = kzalloc(ctrl_send_size, GFP_KERNEL);
++	vmalloced = false;
++	if (ctrl_send_size < PAGE_SIZE)
++		ctrl_send = kzalloc(ctrl_send_size, GFP_KERNEL);
++	else {
++		vmalloced = true;
++		ctrl_send = vzalloc(ctrl_send_size);
++	}
 +	if (!ctrl_send) {
 +		ret = -ENOMEM;
 +		goto put_files;
@@ -854,9 +931,18 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +	ctrl_send->hdr.type = VIRTIO_WL_CMD_VFD_SEND;
 +#ifdef SEND_VIRTGPU_RESOURCES
 +	if (foreign_id) {
++		struct virtio_wl_ctrl_vfd_send_vfd *v1 = NULL;
++		struct virtio_wl_ctrl_vfd_send_vfd_v2 *v2 = NULL;
++
++		if (vi->use_send_vfd_v2)
++			v2 = (struct virtio_wl_ctrl_vfd_send_vfd_v2 *) vfd_ids;
++		else
++			v1 = (struct virtio_wl_ctrl_vfd_send_vfd *) vfd_ids;
++
 +		ctrl_send->hdr.type = VIRTIO_WL_CMD_VFD_SEND_FOREIGN_ID;
-+		ret = encode_vfd_ids_foreign(vfds, virtgpu_dma_bufs, vfd_count,
-+			(struct virtio_wl_ctrl_vfd_send_vfd *)vfd_ids);
++		ret = encode_vfd_ids_foreign(vfds,
++			virtgpu_dma_bufs, virtgpu_dma_fence, vfd_count,
++			v1, v2);
 +	} else {
 +		ret = encode_vfd_ids(vfds, vfd_count, (__le32 *)vfd_ids);
 +	}
@@ -874,20 +960,38 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +	}
 +
 +	init_completion(&finish_completion);
-+	sg_init_one(&out_sg, ctrl_send, ctrl_send_size);
-+	sg_init_one(&in_sg, ctrl_send, sizeof(struct virtio_wl_ctrl_hdr));
++	if (!vmalloced) {
++		sg_init_one(&out_sg, ctrl_send, ctrl_send_size);
++		sg_init_one(&in_sg, ctrl_send,
++		    sizeof(struct virtio_wl_ctrl_hdr));
++		ret = vq_queue_out(vi, &out_sg, &in_sg, &finish_completion,
++		    filp->f_flags & O_NONBLOCK);
++	} else {
++		area = find_vm_area(ctrl_send);
++		ret = sg_alloc_table_from_pages(&sgt, area->pages,
++		    area->nr_pages, 0, ctrl_send_size, GFP_KERNEL);
++		if (ret)
++			goto free_ctrl_send;
 +
-+	ret = vq_queue_out(vi, &out_sg, &in_sg, &finish_completion,
-+				       filp->f_flags & O_NONBLOCK);
++		sg_init_table(&in_sg, 1);
++		sg_set_page(&in_sg, area->pages[0],
++		    sizeof(struct virtio_wl_ctrl_hdr), 0);
++
++		ret = vq_queue_out(vi, sgt.sgl, &in_sg, &finish_completion,
++		    filp->f_flags & O_NONBLOCK);
++	}
 +	if (ret)
-+		goto free_ctrl_send;
++		goto free_sgt;
 +
 +	wait_for_completion(&finish_completion);
 +
 +	ret = virtwl_resp_err(ctrl_send->hdr.type);
 +
++free_sgt:
++	if (vmalloced)
++		sg_free_table(&sgt);
 +free_ctrl_send:
-+	kfree(ctrl_send);
++	kvfree(ctrl_send);
 +put_files:
 +	for (i = 0; i < VIRTWL_SEND_MAX_ALLOCS; i++) {
 +		if (vfd_files[i].file)
@@ -895,6 +999,8 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +#ifdef SEND_VIRTGPU_RESOURCES
 +		if (virtgpu_dma_bufs[i])
 +			dma_buf_put(virtgpu_dma_bufs[i]);
++		if (virtgpu_dma_fence[i])
++			dma_fence_put(virtgpu_dma_fence[i]);
 +#endif
 +	}
 +	return ret;
@@ -1054,6 +1160,7 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +	int ret = 0;
 +
 +	if (ioctl_new->type != VIRTWL_IOCTL_NEW_CTX &&
++		ioctl_new->type != VIRTWL_IOCTL_NEW_CTX_NAMED &&
 +		ioctl_new->type != VIRTWL_IOCTL_NEW_ALLOC &&
 +		ioctl_new->type != VIRTWL_IOCTL_NEW_PIPE_READ &&
 +		ioctl_new->type != VIRTWL_IOCTL_NEW_PIPE_WRITE &&
@@ -1090,6 +1197,11 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +		ctrl_new->hdr.type = VIRTIO_WL_CMD_VFD_NEW_CTX;
 +		ctrl_new->flags = VIRTIO_WL_VFD_WRITE | VIRTIO_WL_VFD_READ;
 +		break;
++	case VIRTWL_IOCTL_NEW_CTX_NAMED:
++		ctrl_new->hdr.type = VIRTIO_WL_CMD_VFD_NEW_CTX_NAMED;
++		ctrl_new->flags = VIRTIO_WL_VFD_WRITE | VIRTIO_WL_VFD_READ;
++		memcpy(ctrl_new->name, ioctl_new->name, sizeof(ctrl_new->name));
++		break;
 +	case VIRTWL_IOCTL_NEW_ALLOC:
 +		ctrl_new->hdr.type = VIRTIO_WL_CMD_VFD_NEW;
 +		ctrl_new->size = PAGE_ALIGN(ioctl_new->size);
@@ -1111,7 +1223,7 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +			       sizeof(ioctl_new->dmabuf));
 +			break;
 +		}
-+		/* fall-through */
++		fallthrough;
 +	default:
 +		ret = -EINVAL;
 +		goto remove_vfd;
@@ -1238,7 +1350,7 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +		if (vfds[i])
 +			do_vfd_close(vfds[i]);
 +		if (fds[i] >= 0)
-+			__close_fd(current->files, fds[i]);
++			close_fd(fds[i]);
 +	}
 +	return ret;
 +}
@@ -1284,7 +1396,7 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +	int ret;
 +
 +	/* Early check for user error. */
-+	ret = !access_ok( ptr, size);
++	ret = !access_ok(ptr, size);
 +	if (ret)
 +		return -EFAULT;
 +
@@ -1307,7 +1419,7 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +	ret = copy_to_user(ptr, &ioctl_new, size);
 +	if (ret) {
 +		/* The release operation will handle freeing this alloc */
-+		ksys_close(ioctl_new.fd);
++		close_fd(ioctl_new.fd);
 +		return -EFAULT;
 +	}
 +
@@ -1413,8 +1525,8 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +	for (i = 0; i < VIRTWL_QUEUE_COUNT; i++)
 +		mutex_init(&vi->vq_locks[i]);
 +
-+    ret = virtio_find_vqs(vdev, VIRTWL_QUEUE_COUNT, vi->vqs, 
-+            vq_callbacks, vq_names, NULL);
++	ret = virtio_find_vqs(vdev, VIRTWL_QUEUE_COUNT, vi->vqs, vq_callbacks,
++			      vq_names, NULL);
 +	if (ret) {
 +		pr_warn("virtwl: failed to find virtio wayland queues: %d\n",
 +			ret);
@@ -1427,6 +1539,8 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +
 +	mutex_init(&vi->vfds_lock);
 +	idr_init(&vi->vfds);
++
++	vi->use_send_vfd_v2 = virtio_has_feature(vdev, VIRTIO_WL_F_SEND_FENCES);
 +
 +	/* lock is unneeded as we have unique ownership */
 +	ret = vq_fill_locked(vi->vqs[VIRTWL_VQ_IN]);
@@ -1479,7 +1593,6 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +{
 +}
 +
-+
 +static struct virtio_device_id id_table[] = {
 +	{ VIRTIO_ID_WL, VIRTIO_DEV_ANY_ID },
 +	{ 0 },
@@ -1490,7 +1603,8 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +};
 +
 +static unsigned int features[] = {
-+	VIRTIO_WL_F_TRANS_FLAGS
++	VIRTIO_WL_F_TRANS_FLAGS,
++	VIRTIO_WL_F_SEND_FENCES,
 +};
 +
 +static struct virtio_driver virtio_wl_driver = {
@@ -1510,48 +1624,21 @@ diff -uprN linux-5.3/drivers/virtio/virtio_wl.c linux-5.3-wl/drivers/virtio/virt
 +MODULE_DEVICE_TABLE(virtio, id_table);
 +MODULE_DESCRIPTION("Virtio wayland driver");
 +MODULE_LICENSE("GPL");
-diff -uprN linux-5.3/include/drm/virtio_drm.h linux-5.3-wl/include/drm/virtio_drm.h
---- linux-5.3/include/drm/virtio_drm.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux-5.3-wl/include/drm/virtio_drm.h	2019-09-19 23:01:36.339268667 -0400
-@@ -0,0 +1,24 @@
-+/* SPDX-License-Identifier: GPL-2.0 */
-+/*
-+ * Virtio GPU interfaces for sharing data.
-+ *
-+ * Copyright (C) 2018 Google, Inc.
-+ */
-+
-+#ifndef _VIRTIO_DRM_H
-+#define _VIRTIO_DRM_H
-+
-+/*
-+ * The following methods are to share dma bufs with a host via the
-+ * virtio Wayland (virtwl) device.
-+ */
-+
-+/*
-+ * Converts the given dma_buf to the virtio-gpu specific resource handle
-+ * backing the dma_buf, waiting for creation to be confirmed by the host
-+ * if necessary.
-+ */
-+extern int virtio_gpu_dma_buf_to_handle(struct dma_buf *buf, bool no_wait,
-+					uint32_t *handle);
-+
-+#endif /* _VIRTIO_DRM_H */
-diff -uprN linux-5.3/include/uapi/linux/virtio_ids.h linux-5.3-wl/include/uapi/linux/virtio_ids.h
---- linux-5.3/include/uapi/linux/virtio_ids.h	2019-09-15 17:19:32.000000000 -0400
-+++ linux-5.3-wl/include/uapi/linux/virtio_ids.h	2019-09-19 23:02:44.442271914 -0400
-@@ -45,5 +45,6 @@
- #define VIRTIO_ID_CRYPTO       20 /* virtio crypto */
- #define VIRTIO_ID_IOMMU        23 /* virtio IOMMU */
- #define VIRTIO_ID_PMEM         27 /* virtio pmem */
-+#define VIRTIO_ID_WL           30 /* virtio wayland */
+diff -uprN linux-6.0.12/include/uapi/linux/virtio_ids.h linux-6.0.12-wl/include/uapi/linux/virtio_ids.h
+--- linux-6.0.12/include/uapi/linux/virtio_ids.h	2022-12-08 05:30:22.000000000 -0500
++++ linux-6.0.12-wl/include/uapi/linux/virtio_ids.h	2022-12-30 13:31:58.237086721 -0500
+@@ -81,4 +81,7 @@
+ #define VIRTIO_TRANS_ID_RNG		0x1005 /* transitional virtio rng */
+ #define VIRTIO_TRANS_ID_9P		0x1009 /* transitional virtio 9p console */
  
++#define VIRTIO_ID_WL		63 /* virtio wayland */
++
++
  #endif /* _LINUX_VIRTIO_IDS_H */
-diff -uprN linux-5.3/include/uapi/linux/virtio_wl.h linux-5.3-wl/include/uapi/linux/virtio_wl.h
---- linux-5.3/include/uapi/linux/virtio_wl.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux-5.3-wl/include/uapi/linux/virtio_wl.h	2019-09-19 23:01:36.340268667 -0400
-@@ -0,0 +1,135 @@
+diff -uprN linux-6.0.12/include/uapi/linux/virtio_wl.h linux-6.0.12-wl/include/uapi/linux/virtio_wl.h
+--- linux-6.0.12/include/uapi/linux/virtio_wl.h	1969-12-31 19:00:00.000000000 -0500
++++ linux-6.0.12-wl/include/uapi/linux/virtio_wl.h	2022-12-30 13:15:42.000000000 -0500
+@@ -0,0 +1,154 @@
 +#ifndef _LINUX_VIRTIO_WL_H
 +#define _LINUX_VIRTIO_WL_H
 +/*
@@ -1572,6 +1659,8 @@ diff -uprN linux-5.3/include/uapi/linux/virtio_wl.h linux-5.3-wl/include/uapi/li
 +
 +/* Enables the transition to new flag semantics */
 +#define VIRTIO_WL_F_TRANS_FLAGS 1
++/* Enables send fence support with virtio_wl_ctrl_vfd_send_vfd_v2 */
++#define VIRTIO_WL_F_SEND_FENCES 2
 +
 +struct virtio_wl_config {
 +};
@@ -1591,6 +1680,7 @@ diff -uprN linux-5.3/include/uapi/linux/virtio_wl.h linux-5.3-wl/include/uapi/li
 +	VIRTIO_WL_CMD_VFD_NEW_DMABUF, /* virtio_wl_ctrl_vfd_new */
 +	VIRTIO_WL_CMD_VFD_DMABUF_SYNC, /* virtio_wl_ctrl_vfd_dmabuf_sync */
 +	VIRTIO_WL_CMD_VFD_SEND_FOREIGN_ID, /* virtio_wl_ctrl_vfd_send + data */
++	VIRTIO_WL_CMD_VFD_NEW_CTX_NAMED, /* virtio_wl_ctrl_vfd_new */
 +
 +	VIRTIO_WL_RESP_OK = 0x1000,
 +	VIRTIO_WL_RESP_VFD_NEW = 0x1001, /* virtio_wl_ctrl_vfd_new */
@@ -1632,18 +1722,22 @@ diff -uprN linux-5.3/include/uapi/linux/virtio_wl.h linux-5.3-wl/include/uapi/li
 +	__le32 flags; /* virtio_wl_vfd_flags */
 +	__le64 pfn; /* first guest physical page frame number if VFD_MAP */
 +	__le32 size; /* size in bytes if VIRTIO_WL_CMD_VFD_NEW* */
-+	/* buffer description if VIRTIO_WL_CMD_VFD_NEW_DMABUF */
-+	struct {
-+		__le32 width; /* width in pixels */
-+		__le32 height; /* height in pixels */
-+		__le32 format; /* fourcc format */
-+		__le32 stride0; /* return stride0 */
-+		__le32 stride1; /* return stride1 */
-+		__le32 stride2; /* return stride2 */
-+		__le32 offset0; /* return offset0 */
-+		__le32 offset1; /* return offset1 */
-+		__le32 offset2; /* return offset2 */
-+	} dmabuf;
++	union {
++		/* buffer description if VIRTIO_WL_CMD_VFD_NEW_DMABUF */
++		struct {
++			__le32 width; /* width in pixels */
++			__le32 height; /* height in pixels */
++			__le32 format; /* fourcc format */
++			__le32 stride0; /* return stride0 */
++			__le32 stride1; /* return stride1 */
++			__le32 stride2; /* return stride2 */
++			__le32 offset0; /* return offset0 */
++			__le32 offset1; /* return offset1 */
++			__le32 offset2; /* return offset2 */
++		} dmabuf;
++		/* name of socket if VIRTIO_WL_CMD_VFD_NEW_CTX_NAMED */
++		char name[32];
++	};
 +};
 +
 +
@@ -1652,11 +1746,23 @@ diff -uprN linux-5.3/include/uapi/linux/virtio_wl.h linux-5.3-wl/include/uapi/li
 +	VIRTIO_WL_CTRL_VFD_SEND_KIND_LOCAL,
 +	/* The id after this one is a virtio-gpu resource id. */
 +	VIRTIO_WL_CTRL_VFD_SEND_KIND_VIRTGPU,
++	VIRTIO_WL_CTRL_VFD_SEND_KIND_VIRTGPU_FENCE,
++	VIRTIO_WL_CTRL_VFD_SEND_KIND_VIRTGPU_SIGNALED_FENCE,
 +};
 +
 +struct virtio_wl_ctrl_vfd_send_vfd {
 +	__le32 kind; /* virtio_wl_ctrl_vfd_send_kind */
 +	__le32 id;
++};
++
++struct virtio_wl_ctrl_vfd_send_vfd_v2 {
++	__le32 kind; /* virtio_wl_ctrl_vfd_send_kind */
++	union {
++		/* For KIND_LOCAL and KIND_VIRTGPU */
++		__le32 id;
++		/* For KIND_VIRTGPU_FENCE */
++		__le64 seqno;
++	};
 +};
 +
 +struct virtio_wl_ctrl_vfd_send {
@@ -1687,10 +1793,10 @@ diff -uprN linux-5.3/include/uapi/linux/virtio_wl.h linux-5.3-wl/include/uapi/li
 +};
 +
 +#endif /* _LINUX_VIRTIO_WL_H */
-diff -uprN linux-5.3/include/uapi/linux/virtwl.h linux-5.3-wl/include/uapi/linux/virtwl.h
---- linux-5.3/include/uapi/linux/virtwl.h	1969-12-31 19:00:00.000000000 -0500
-+++ linux-5.3-wl/include/uapi/linux/virtwl.h	2019-09-19 23:01:36.340268667 -0400
-@@ -0,0 +1,64 @@
+diff -uprN linux-6.0.12/include/uapi/linux/virtwl.h linux-6.0.12-wl/include/uapi/linux/virtwl.h
+--- linux-6.0.12/include/uapi/linux/virtwl.h	1969-12-31 19:00:00.000000000 -0500
++++ linux-6.0.12-wl/include/uapi/linux/virtwl.h	2022-12-30 13:15:42.000000000 -0500
+@@ -0,0 +1,67 @@
 +#ifndef _LINUX_VIRTWL_H
 +#define _LINUX_VIRTWL_H
 +
@@ -1714,6 +1820,7 @@ diff -uprN linux-5.3/include/uapi/linux/virtwl.h linux-5.3-wl/include/uapi/linux
 +	VIRTWL_IOCTL_NEW_PIPE_WRITE,
 +	/* create a new virtwl dmabuf that is writable via the returned fd */
 +	VIRTWL_IOCTL_NEW_DMABUF,
++	VIRTWL_IOCTL_NEW_CTX_NAMED, /* open a new named connection context */
 +};
 +
 +struct virtwl_ioctl_new {
@@ -1735,6 +1842,8 @@ diff -uprN linux-5.3/include/uapi/linux/virtwl.h linux-5.3-wl/include/uapi/linux
 +			__u32 offset1; /* return offset1 */
 +			__u32 offset2; /* return offset2 */
 +		} dmabuf;
++		/* name of socket if type == VIRTIO_WL_CMD_VFD_NEW_CTX_NAMED */
++		char name[32];
 +	};
 +};
 +
