@@ -97,9 +97,9 @@ pub const _VIRTIO_CONFIG_S_FAILED      : u8 = 0x80;
 
 pub const _VRING_USED_F_NO_NOTIFY: u16 = 1;
 pub const _VRING_AVAIL_F_NO_INTERRUPT: u16 = 1;
-pub const _VIRTIO_F_INDIRECT_DESC: u64 = (1 << 28);
-pub const VIRTIO_F_EVENT_IDX: u64 = (1 << 29);
-pub const VIRTIO_F_VERSION_1: u64 = (1 << 32);
+pub const _VIRTIO_F_INDIRECT_DESC: u64 = 1 << 28;
+pub const VIRTIO_F_EVENT_IDX: u64 = 1 << 29;
+pub const VIRTIO_F_VERSION_1: u64 = 1 << 32;
 
 pub const VRING_DESC_F_NEXT: u16     = 1;
 pub const VRING_DESC_F_WRITE: u16    = 2;

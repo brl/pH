@@ -119,14 +119,14 @@ impl Kvm {
 
 #[derive(Clone)]
 pub struct KvmVcpu {
-    id: usize,
+    _id: usize,
     cpufd: Arc<ioctl::VcpuFd>,
     sysfd: Arc<ioctl::SysFd>,
 }
 
 impl KvmVcpu {
     fn new(id: usize, cpufd: Arc<ioctl::VcpuFd>, sysfd: Arc<ioctl::SysFd>) -> KvmVcpu {
-        KvmVcpu { id, cpufd, sysfd }
+        KvmVcpu { _id: id, cpufd, sysfd }
     }
 
     pub fn raw_fd(&self) -> RawFd {

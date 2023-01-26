@@ -166,9 +166,9 @@ impl KvmRunArea {
     fn handle_exit_mmio(&mut self) {
         let exit = self.get_mmio_exit();
         if exit.write {
-            self.handle_mmio_write(exit.phys, exit.size)
+            self.handle_mmio_write(exit.phys, exit.size);
         } else {
-            self.handle_mmio_read(exit.phys, exit.size)
+            self.handle_mmio_read(exit.phys, exit.size);
         }
     }
 

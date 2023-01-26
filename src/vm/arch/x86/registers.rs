@@ -56,7 +56,7 @@ const X86_CR0_PG: u64 = 0x80000000;
 const X86_CR4_PAE: u64 = 0x20;
 
 const EFER_LME: u64 = 0x100;
-const EFER_LMA: u64 = (1 << 10);
+const EFER_LMA: u64 = 1 << 10;
 
 pub fn setup_pm_sregs(vcpu: &KvmVcpu) -> Result<()> {
 

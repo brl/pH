@@ -46,15 +46,15 @@ pub trait FileSystemOps: Clone+Sync+Send {
 
 #[derive(Clone)]
 pub struct FileSystem {
-    root: PathBuf,
-    readonly: bool,
+    _root: PathBuf,
+    _readonly: bool,
     euid_root: bool,
 }
 
 impl FileSystem {
     pub fn new(root: PathBuf, readonly: bool) -> FileSystem {
         let euid_root = Self::is_euid_root();
-        FileSystem { root, readonly, euid_root }
+        FileSystem { _root: root, _readonly: readonly, euid_root }
     }
 
     pub fn is_euid_root() -> bool {

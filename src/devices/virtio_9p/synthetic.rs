@@ -22,7 +22,7 @@ struct NodeData {
     qid: Qid,
     size: u64,
     mode: u32,
-    inode: u32,
+    _inode: u32,
 }
 
 impl NodeData {
@@ -163,7 +163,7 @@ impl NodeData {
         NodeData {
             name: name.into(),
             qid: Self::create_qid(qtype, inode),
-            size, mode, inode,
+            size, mode, _inode: inode,
         }
     }
 

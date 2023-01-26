@@ -8,8 +8,8 @@ use crate::system;
 use crate::vm::arch::x86::mptable::setup_mptable;
 use crate::virtio::PciIrq;
 
-pub const HIMEM_BASE: u64 = (1 << 32);
-pub const PCI_MMIO_RESERVED_SIZE: usize = (512 << 20);
+pub const HIMEM_BASE: u64 = 1 << 32;
+pub const PCI_MMIO_RESERVED_SIZE: usize = 512 << 20;
 pub const PCI_MMIO_RESERVED_BASE: u64 = HIMEM_BASE - PCI_MMIO_RESERVED_SIZE as u64;
 
 
@@ -69,9 +69,9 @@ fn write_gdt_table(table: &[u64], memory: &GuestRam) -> system::Result<()> {
 }
 
 pub fn gdt_entry(flags: u16, base: u32, limit: u32) -> u64 {
-    ((((base as u64) & 0xff000000u64) << (56 - 24)) | (((flags as u64) & 0x0000f0ffu64) << 40) |
+    (((base as u64) & 0xff000000u64) << (56 - 24)) | (((flags as u64) & 0x0000f0ffu64) << 40) |
         (((limit as u64) & 0x000f0000u64) << (48 - 16)) |
-        (((base as u64) & 0x00ffffffu64) << 16) | ((limit as u64) & 0x0000ffffu64))
+        (((base as u64) & 0x00ffffffu64) << 16) | ((limit as u64) & 0x0000ffffu64)
 }
 
 pub fn setup_gdt(memory: &GuestRam) -> Result<()> {

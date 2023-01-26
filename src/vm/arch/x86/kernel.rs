@@ -100,26 +100,26 @@ pub fn load_elf_kernel(memory: &GuestRam) -> io::Result<()> {
 
 struct ElfPhdr {
     pub p_type: u32,
-    pub p_flags: u32,
+    pub _p_flags: u32,
     pub p_offset: u64,
-    pub p_vaddr: u64,
+    pub _p_vaddr: u64,
     pub p_paddr: u64,
     pub p_filesz: u64,
-    pub p_memsz: u64,
-    pub p_align: u64,
+    pub _p_memsz: u64,
+    pub _p_align: u64,
 }
 
 impl ElfPhdr {
     fn load_from(buf: &mut ByteBuffer<&[u8]>) -> Self {
         ElfPhdr {
             p_type: buf.read(),
-            p_flags: buf.read(),
+            _p_flags: buf.read(),
             p_offset: buf.read(),
-            p_vaddr: buf.read(),
+            _p_vaddr: buf.read(),
             p_paddr: buf.read(),
             p_filesz: buf.read(),
-            p_memsz: buf.read(),
-            p_align: buf.read(),
+            _p_memsz: buf.read(),
+            _p_align: buf.read(),
         }
     }
 

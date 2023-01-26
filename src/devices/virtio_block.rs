@@ -7,10 +7,10 @@ use crate::virtio::{VirtioBus, VirtioDeviceOps, VirtQueue, DeviceConfigArea, Cha
 use crate::memory::MemoryManager;
 use crate::disk::DiskImage;
 
-const VIRTIO_BLK_F_RO: u64 = (1 << 5);
-const VIRTIO_BLK_F_BLK_SIZE: u64 = (1 << 6);
-const VIRTIO_BLK_F_FLUSH: u64 = (1 << 9);
-const VIRTIO_BLK_F_SEG_MAX: u64 = (1 << 2);
+const VIRTIO_BLK_F_RO: u64 = 1 << 5;
+const VIRTIO_BLK_F_BLK_SIZE: u64 = 1 << 6;
+const VIRTIO_BLK_F_FLUSH: u64 = 1 << 9;
+const VIRTIO_BLK_F_SEG_MAX: u64 = 1 << 2;
 
 const VIRTIO_BLK_T_IN: u32 = 0;
 const VIRTIO_BLK_T_OUT: u32 = 1;
