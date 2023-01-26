@@ -12,6 +12,10 @@ const _ECX_EPB_SHIFT: u32 = 3; // "Energy Performance Bias" bit.
 const _ECX_HYPERVISOR_SHIFT: u32 = 31; // Flag to be set when the cpu is running on a hypervisor.
 const _EDX_HTT_SHIFT: u32 = 28; // Hyper Threading Enabled.
 
+const INTEL_EBX: u32 = u32::from_le_bytes([b'G', b'e', b'n', b'u']);
+const INTEL_EDX: u32 = u32::from_le_bytes([b'i', b'n', b'e', b'I']);
+const INTEL_ECX: u32 = u32::from_le_bytes([b'n', b't', b'e', b'l']);
+
 pub fn setup_cpuid(vcpu: &KvmVcpu) -> Result<()> {
     let mut cpuid = kvm_get_supported_cpuid(vcpu.sys_raw_fd())?;
     let cpu_id = 0u32; // first vcpu
@@ -19,9 +23,9 @@ pub fn setup_cpuid(vcpu: &KvmVcpu) -> Result<()> {
     for e in &mut cpuid {
         match e.function {
             0 => {
-                e.ebx = 0x67627553;
-                e.ecx = 0x20487020;
-                e.edx = 0x68706172;
+                e.ebx = INTEL_EBX;
+                e.ecx = INTEL_ECX;
+                e.edx = INTEL_EDX;
             }
             1 => {
                 if e.index == 0 {
