@@ -5,14 +5,14 @@ compositing to a 'host' compositor. Sommelier includes a set of features that
 allows it to run inside a tight jail or virtual machine.
 
 Sommelier can run as service or as a wrapper around the execution of a
-program. As a service, it spawns new processes as needed to service clients.
-The parent process is called the master sommelier.
+program. As a service, called the parent sommelier, it spawns new processes as
+needed to service clients.
 
 ## Sommeliers
 
-### Master Sommelier
+### Parent Sommelier
 
-The master sommelier instance will create a wayland socket in XDG_RUNTIME_DIR
+The parent sommelier instance will create a wayland socket in XDG_RUNTIME_DIR
 and accept connections from regular wayland clients. Each connection will be
 serviced by spawning a child sommelier process.
 
@@ -57,12 +57,6 @@ host compositor. Sommelier provides a shared memory driver option as a
 solution for this. What's the most appropriate option depends on the host
 compositor and device drivers available for allocating buffers.
 
-### Noop
-
-The `noop` shared memory driver simply forwards buffers to the host without
-any special processing. This requires that the client inside the container is
-using memory that can be shared with the host compositor.
-
 ### VirtWL
 
 The `virtwl` driver creates a set of intermediate virtwl buffers for each
@@ -80,15 +74,6 @@ are:
 * Larger set of supported formats (E.g NV12).
 * Host compositor can avoid expensive texture uploads.
 * HW overlays can be used for presentation if support by the host compositor.
-
-### DMABuf
-
-The `dmabuf` driver is similar to the `virtwl-dmabuf` driver. It creates a set
-of intermediate buffers for each surface and copies minimal damaged areas from
-the client’s standard shared memory buffer into the DMABuf buffer. However,
-the buffer is allocated using a DRM device and a prime FD is used to access
-buffer memory inside the container. Intermediate buffers are shared with the
-host compositor using the linux_dmabuf protocol.
 
 ## Damage Tracking
 
@@ -126,12 +111,6 @@ callbacks or similar mechanism.
 Socket pairs created inside a container cannot always be shared with the
 host compositor. Sommelier provides a data driver option as a solution
 for this.
-
-### Noop
-
-The `noop` driver simply forwards socket pair FDs to the host without any
-special processing. This requires that the client inside the container is
-using socket pairs that can be shared with the host compositor.
 
 ### VirtWL
 
@@ -178,10 +157,11 @@ scaling used by sommelier and the host compositor.
 An exact value for DPI is calculated by sommelier. However, many Linux
 programs expect DPI to be one out of a well known set of values. Sommelier
 solves this by adjusting DPI using a set of buckets. For example, given the
-default set of buckets (72, 96, 160, 240), Sommelier will use 96 as DPI when
-the exact value is 112, or 160 when exact value is 188. The DPI buckets that
+set of buckets (72, 96, 160, 240), Sommelier will use 96 as DPI when the
+exact value is 112, or 160 when exact value is 188. The DPI buckets that
 sommelier should use can be specified with `--dpi=[DPI[,DPI...]]`. Where,
-`--dpi=””` will result in sommelier exposing the exact DPI value to clients.
+`--dpi=””` will result in sommelier exposing the exact DPI value to clients
+(this is the default behaviour).
 
 ### XCursor
 
@@ -194,7 +174,7 @@ If the host compositor support dynamic handling of keyboard events, then
 keyboard shortcuts are forwarded to the Linux program by default. A small set
 of shortcuts are expected to be reserved by the host compositor. A list of
 reserved shortcuts on Chrome OS can be found
-[here](https://chromium.googlesource.com/chromium/src/+/master/ash/accelerators/accelerator_table.h#22).
+[here](https://chromium.googlesource.com/chromium/src/+/HEAD/ash/accelerators/accelerator_table.h#22).
 
 There’s unfortunately no reliable way to detect if a Linux program handled a
 key event or not. This means that all non-reserved shortcuts that the user
@@ -204,7 +184,7 @@ the "launcher" button during normal usage. The "launcher" button event is
 forwarded to Linux programs by default so it won’t work when a Linux program
 has keyboard focus unless this shortcut is explicitly listed as an accelerator.
 
-Sommelier provides the `--accelerator=ACCELERATORS` flag for this purpose.
+Sommelier provides the `--accelerators=ACCELERATORS` flag for this purpose.
 `ACCELERATORS` is a comma separated list of accelerators that shouldn’t be
 forwarded to the Linux program but instead handled by the host compositor.
 Each accelerator can contain a list of modifiers (e.g. `<Control><Alt>`) and
@@ -214,15 +194,20 @@ above (which happens to have XKB keysym `Super_L` on the Chromebook Pixel),
 `--accelerators=Super_L` needs to be passed to sommelier for the this button to
 bring up the application launcher when Linux programs have keyboard focus.
 
-Consistent with other flags, `SOMMELIER_ACCELERATORS` environment variable can
+There is also the `--windowed-accelerators=WINDOWED_ACCELERATORS` flag for
+accelerators that should be handled by the host compositor when the focused
+window is windowed but not while it is fullscreen.
+
+Consistent with other flags, `SOMMELIER_ACCELERATORS` and
+`SOMMELIER_WINDOWED_ACCELERATORS` environment variable can
 be used as an alternative to the command line flag.
 
 ## Examples
 
-Start master sommelier and use wayland-1 as name of socket to listen on:
+Start parent sommelier and use wayland-1 as name of socket to listen on:
 
 ```
-sommelier --master --socket=wayland-1
+sommelier --parent --socket=wayland-1
 ```
 
 Start sommelier that runs weston-terminal with density scale multiplier 1.5:

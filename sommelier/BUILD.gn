@@ -1,23 +1,18 @@
-# Copyright 2019 The Chromium OS Authors. All rights reserved.
+# Copyright 2019 The ChromiumOS Authors
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//common-mk/pkg_config.gni")
 import("wayland_protocol.gni")
 
 group("all") {
-  deps = [
-    ":sommelier",
-    ":wayland_demo",
-    ":x11_demo",
-  ]
-}
-
-if (!defined(peer_cmd_prefix)) {
-  if (use.amd64) {
-    peer_cmd_prefix = "\"/opt/google/cros-containers/lib/ld-linux-x86-64.so.2 --library-path /opt/google/cros-containers/lib --inhibit-rpath \\\"\\\"\""
+  deps = [ ":sommelier" ]
+  if (use.fuzzer) {
+    deps += [ ":sommelier_wayland_fuzzer" ]
   }
-  if (use.arm) {
-    peer_cmd_prefix = "\"/opt/google/cros-containers/lib/ld-linux-armhf.so.3 --library-path /opt/google/cros-containers/lib --inhibit-rpath \\\"\\\"\""
+
+  if (use.test) {
+    deps += [ ":sommelier_test" ]
   }
 }
 
@@ -29,21 +24,6 @@ if (!defined(xwayland_path)) {
 # Set this to the GL driver path to use for Xwayland.
 if (!defined(xwayland_gl_driver_path)) {
   xwayland_gl_driver_path = "\"/opt/google/cros-containers/lib\""
-}
-
-# Set this to the shm driver to use for Xwayland.
-if (!defined(xwayland_shm_driver)) {
-  xwayland_shm_driver = "\"virtwl\""
-}
-
-# Set this to the shm driver to use for wayland clients.
-if (!defined(shm_driver)) {
-  shm_driver = "\"virtwl-dmabuf\""
-}
-
-# Set this to the virtwl device.
-if (!defined(virtwl_device)) {
-  virtwl_device = "\"/dev/wl0\""
 }
 
 # Set this to the frame color to use for Xwayland clients.
@@ -61,87 +41,131 @@ wayland_protocol_library("sommelier-protocol") {
   sources = [
     "protocol/aura-shell.xml",
     "protocol/drm.xml",
+    "protocol/gaming-input-unstable-v2.xml",
     "protocol/gtk-shell.xml",
     "protocol/keyboard-extension-unstable-v1.xml",
     "protocol/linux-dmabuf-unstable-v1.xml",
+    "protocol/linux-explicit-synchronization-unstable-v1.xml",
     "protocol/pointer-constraints-unstable-v1.xml",
     "protocol/relative-pointer-unstable-v1.xml",
+    "protocol/text-input-extension-unstable-v1.xml",
     "protocol/text-input-unstable-v1.xml",
+    "protocol/text-input-x11-unstable-v1.xml",
     "protocol/viewporter.xml",
-    "protocol/xdg-shell-unstable-v6.xml",
+    "protocol/xdg-output-unstable-v1.xml",
+    "protocol/xdg-shell.xml",
   ]
+}
+
+gaming_defines = [ "GAMEPAD_SUPPORT" ]
+gaming_deps = [ ":libgaming" ]
+
+tracing_defines = [ "PERFETTO_TRACING" ]
+tracing_pkg_deps = [ "perfetto" ]
+tracing_libs = [ "pthread" ]
+
+sommelier_defines = [
+                      "_GNU_SOURCE",
+                      "WL_HIDE_DEPRECATED",
+                      "XWAYLAND_PATH=${xwayland_path}",
+                      "XWAYLAND_GL_DRIVER_PATH=${xwayland_gl_driver_path}",
+                      "FRAME_COLOR=${frame_color}",
+                      "DARK_FRAME_COLOR=${dark_frame_color}",
+                    ] + gaming_defines + tracing_defines
+
+static_library("libgaming") {
+  sources = [ "sommelier-gaming.cc" ]
+  defines = gaming_defines
+  pkg_deps = [
+    "libevdev",
+    "pixman-1",
+  ]
+  deps = [ ":sommelier-protocol" ]
+}
+
+static_library("libsommelier") {
+  sources = [
+    "compositor/sommelier-compositor.cc",
+    "compositor/sommelier-drm.cc",
+    "compositor/sommelier-mmap.cc",
+    "compositor/sommelier-shm.cc",
+    "sommelier-ctx.cc",
+    "sommelier-data-device-manager.cc",
+    "sommelier-display.cc",
+    "sommelier-global.cc",
+    "sommelier-gtk-shell.cc",
+    "sommelier-output.cc",
+    "sommelier-pointer-constraints.cc",
+    "sommelier-relative-pointer-manager.cc",
+    "sommelier-seat.cc",
+    "sommelier-shell.cc",
+    "sommelier-subcompositor.cc",
+    "sommelier-text-input.cc",
+    "sommelier-timing.cc",
+    "sommelier-tracing.cc",
+    "sommelier-transform.cc",
+    "sommelier-util.cc",
+    "sommelier-viewporter.cc",
+    "sommelier-window.cc",
+    "sommelier-xdg-shell.cc",
+    "sommelier-xshape.cc",
+    "sommelier.cc",
+    "virtualization/virtgpu_channel.cc",
+    "virtualization/virtwl_channel.cc",
+  ]
+  include_dirs = []
+  defines = sommelier_defines
+  pkg_deps = [
+               "gbm",
+               "libdrm",
+               "pixman-1",
+               "wayland-client",
+               "wayland-server",
+               "xcb",
+               "xcb-composite",
+               "xcb-shape",
+               "xcb-xfixes",
+               "xkbcommon",
+             ] + tracing_pkg_deps
+  libs = [ "m" ] + tracing_libs
+  deps = [ ":sommelier-protocol" ] + gaming_deps
 }
 
 executable("sommelier") {
-  pkg_deps = [
-    "gbm",
-    "grpc++",
-    "libdrm",
-    "pixman-1",
-    "protobuf",
-    "vm_protos",
-    "wayland-client",
-    "wayland-server",
-    "xcb",
-    "xcb-composite",
-    "xcb-xfixes",
-    "xkbcommon",
-  ]
-  libs = [ "m" ]
-  deps = [
-    ":sommelier-protocol",
-  ]
-  sources = [
-    "sommelier-compositor.c",
-    "sommelier-data-device-manager.c",
-    "sommelier-display.c",
-    "sommelier-drm.c",
-    "sommelier-gtk-shell.c",
-    "sommelier-output.c",
-    "sommelier-pointer-constraints.c",
-    "sommelier-relative-pointer-manager.c",
-    "sommelier-seat.c",
-    "sommelier-shell.c",
-    "sommelier-shm.c",
-    "sommelier-subcompositor.c",
-    "sommelier-text-input.c",
-    "sommelier-viewporter.c",
-    "sommelier-xdg-shell.c",
-    "sommelier.c",
-  ]
-  defines = [
-    "_GNU_SOURCE",
-    "WL_HIDE_DEPRECATED",
-    "XWAYLAND_PATH=${xwayland_path}",
-    "XWAYLAND_GL_DRIVER_PATH=${xwayland_gl_driver_path}",
-    "XWAYLAND_SHM_DRIVER=${xwayland_shm_driver}",
-    "SHM_DRIVER=${shm_driver}",
-    "VIRTWL_DEVICE=${virtwl_device}",
-    "PEER_CMD_PREFIX=${peer_cmd_prefix}",
-    "FRAME_COLOR=${frame_color}",
-    "DARK_FRAME_COLOR=${dark_frame_color}",
-  ]
+  sources = [ "sommelier-main.cc" ]
+
+  defines = sommelier_defines
+
+  deps = [ ":libsommelier" ]
 }
 
-executable("wayland_demo") {
-  pkg_deps = [
-    "libbrillo-${libbase_ver}",
-    "libchrome-${libbase_ver}",
-    "wayland-client",
-  ]
-  libs = [ "wayland-client" ]
-  sources = [
-    "demos/wayland_demo.cc",
-  ]
+if (use.test) {
+  executable("sommelier_test") {
+    sources = [ "sommelier_test.cc" ]
+
+    pkg_deps = [ "pixman-1" ]
+
+    # gnlint: disable=GnLintCommonTesting
+    libs = [
+      "gmock",
+      "gtest",
+      "pixman-1",
+    ]
+    defines = sommelier_defines
+    deps = [ ":libsommelier" ]
+  }
 }
 
-executable("x11_demo") {
-  pkg_deps = [
-    "libbrillo-${libbase_ver}",
-    "libchrome-${libbase_ver}",
-  ]
-  libs = [ "X11" ]
-  sources = [
-    "demos/x11_demo.cc",
-  ]
+if (use.fuzzer) {
+  executable("sommelier_wayland_fuzzer") {
+    sources = [ "sommelier-wayland-fuzzer.cc" ]
+    pkg_deps = [ "pixman-1" ]
+    libs = [ "pixman-1" ]
+
+    configs += [ "//common-mk/common_fuzzer" ]
+
+    defines = sommelier_defines
+
+    deps = [ ":libsommelier" ]
+  }
 }

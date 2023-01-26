@@ -1,30 +1,33 @@
-// Copyright 2018 The Chromium OS Authors. All rights reserved.
+// Copyright 2018 The ChromiumOS Authors
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
 #ifndef VM_TOOLS_SOMMELIER_SOMMELIER_H_
 #define VM_TOOLS_SOMMELIER_SOMMELIER_H_
 
+#include <limits.h>
+#include <linux/types.h>
 #include <sys/types.h>
 #include <wayland-server.h>
 #include <wayland-util.h>
 #include <xcb/xcb.h>
 #include <xkbcommon/xkbcommon.h>
 
-#include "config.h"
+#include "compositor/sommelier-mmap.h"  // NOLINT(build/include_directory)
+#include "sommelier-ctx.h"     // NOLINT(build/include_directory)
+#include "sommelier-global.h"  // NOLINT(build/include_directory)
+#include "sommelier-util.h"    // NOLINT(build/include_directory)
+#include "sommelier-window.h"  // NOLINT(build/include_directory)
+#include "weak-resource-ptr.h"  // NOLINT(build/include_directory)
 
 #define SOMMELIER_VERSION "0.20"
 
-#define MIN(a, b) (((a) < (b)) ? (a) : (b))
-#define MAX(a, b) (((a) > (b)) ? (a) : (b))
-
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
-
-#define UNUSED(x) ((void)(x))
 
 #define CONTROL_MASK (1 << 0)
 #define ALT_MASK (1 << 1)
 #define SHIFT_MASK (1 << 2)
+
 
 struct sl_global;
 struct sl_compositor;
@@ -39,148 +42,41 @@ struct sl_aura_shell;
 struct sl_viewporter;
 struct sl_linux_dmabuf;
 struct sl_keyboard_extension;
+struct sl_text_input_extension;
 struct sl_text_input_manager;
 struct sl_relative_pointer_manager;
 struct sl_pointer_constraints;
 struct sl_window;
+struct sl_host_surface;
+struct sl_host_output;
 struct zaura_shell;
 struct zcr_keyboard_extension_v1;
+struct zxdg_output_manager_v1;
 
-enum {
-  ATOM_WM_S0,
-  ATOM_WM_PROTOCOLS,
-  ATOM_WM_STATE,
-  ATOM_WM_CHANGE_STATE,
-  ATOM_WM_DELETE_WINDOW,
-  ATOM_WM_TAKE_FOCUS,
-  ATOM_WM_CLIENT_LEADER,
-  ATOM_WL_SURFACE_ID,
-  ATOM_UTF8_STRING,
-  ATOM_MOTIF_WM_HINTS,
-  ATOM_NET_FRAME_EXTENTS,
-  ATOM_NET_STARTUP_ID,
-  ATOM_NET_SUPPORTING_WM_CHECK,
-  ATOM_NET_WM_NAME,
-  ATOM_NET_WM_MOVERESIZE,
-  ATOM_NET_WM_STATE,
-  ATOM_NET_WM_STATE_FULLSCREEN,
-  ATOM_NET_WM_STATE_MAXIMIZED_VERT,
-  ATOM_NET_WM_STATE_MAXIMIZED_HORZ,
-  ATOM_CLIPBOARD,
-  ATOM_CLIPBOARD_MANAGER,
-  ATOM_TARGETS,
-  ATOM_TIMESTAMP,
-  ATOM_TEXT,
-  ATOM_INCR,
-  ATOM_WL_SELECTION,
-  ATOM_GTK_THEME_VARIANT,
-  ATOM_LAST = ATOM_GTK_THEME_VARIANT,
-};
+#ifdef GAMEPAD_SUPPORT
+struct sl_gamepad;
+struct sl_gaming_input_manager;
+struct zcr_gaming_input_v2;
+#endif
 
-enum {
-  SHM_DRIVER_NOOP,
-  SHM_DRIVER_DMABUF,
-  SHM_DRIVER_VIRTWL,
-  SHM_DRIVER_VIRTWL_DMABUF,
-};
+class WaylandChannel;
 
-enum {
-  DATA_DRIVER_NOOP,
-  DATA_DRIVER_VIRTWL,
-};
+extern const struct wl_registry_listener sl_registry_listener;
 
-struct sl_context {
-  char** runprog;
-  struct wl_display* display;
-  struct wl_display* host_display;
-  struct wl_client* client;
-  struct sl_compositor* compositor;
-  struct sl_subcompositor* subcompositor;
-  struct sl_shm* shm;
-  struct sl_shell* shell;
-  struct sl_data_device_manager* data_device_manager;
-  struct sl_xdg_shell* xdg_shell;
-  struct sl_aura_shell* aura_shell;
-  struct sl_viewporter* viewporter;
-  struct sl_linux_dmabuf* linux_dmabuf;
-  struct sl_keyboard_extension* keyboard_extension;
-  struct sl_text_input_manager* text_input_manager;
-  struct sl_relative_pointer_manager* relative_pointer_manager;
-  struct sl_pointer_constraints* pointer_constraints;
-  struct wl_list outputs;
-  struct wl_list seats;
-  struct wl_event_source* display_event_source;
-  struct wl_event_source* display_ready_event_source;
-  struct wl_event_source* sigchld_event_source;
-  struct wl_array dpi;
-  int shm_driver;
-  int data_driver;
-  int wm_fd;
-  int virtwl_fd;
-  int virtwl_ctx_fd;
-  int virtwl_socket_fd;
-  struct wl_event_source* virtwl_ctx_event_source;
-  struct wl_event_source* virtwl_socket_event_source;
-  const char* drm_device;
-  struct gbm_device* gbm;
-  int xwayland;
-  pid_t xwayland_pid;
-  pid_t child_pid;
-  pid_t peer_pid;
-  struct xkb_context* xkb_context;
-  struct wl_list accelerators;
-  struct wl_list registries;
-  struct wl_list globals;
-  struct wl_list host_outputs;
-  int next_global_id;
-  xcb_connection_t* connection;
-  struct wl_event_source* connection_event_source;
-  const xcb_query_extension_reply_t* xfixes_extension;
-  xcb_screen_t* screen;
-  xcb_window_t window;
-  struct wl_list windows, unpaired_windows;
-  struct sl_window* host_focus_window;
-  int needs_set_input_focus;
-  double desired_scale;
-  double scale;
-  const char* application_id;
-  int exit_with_child;
-  const char* sd_notify;
-  int clipboard_manager;
-  uint32_t frame_color;
-  uint32_t dark_frame_color;
-  struct sl_host_seat* default_seat;
-  xcb_window_t selection_window;
-  xcb_window_t selection_owner;
-  int selection_incremental_transfer;
-  xcb_selection_request_event_t selection_request;
-  xcb_timestamp_t selection_timestamp;
-  struct wl_data_device* selection_data_device;
-  struct sl_data_offer* selection_data_offer;
-  struct sl_data_source* selection_data_source;
-  int selection_data_source_send_fd;
-  struct wl_list selection_data_source_send_pending;
-  struct wl_event_source* selection_send_event_source;
-  xcb_get_property_reply_t* selection_property_reply;
-  int selection_property_offset;
-  struct wl_event_source* selection_event_source;
-  xcb_atom_t selection_data_type;
-  struct wl_array selection_data;
-  int selection_data_offer_receive_fd;
-  int selection_data_ack_pending;
-  union {
-    const char* name;
-    xcb_intern_atom_cookie_t cookie;
-    xcb_atom_t value;
-  } atoms[ATOM_LAST + 1];
-  xcb_visualid_t visual_ids[256];
-  xcb_colormap_t colormaps[256];
-};
+// Exported for testing.
+void sl_registry_handler(void* data,
+                         struct wl_registry* registry,
+                         uint32_t id,
+                         const char* interface,
+                         uint32_t version);
+
+// We require a host compositor supporting at least this wl_compositor version.
+constexpr uint32_t kMinHostWlCompositorVersion =
+    WL_SURFACE_SET_BUFFER_SCALE_SINCE_VERSION;
 
 struct sl_compositor {
   struct sl_context* ctx;
   uint32_t id;
-  uint32_t version;
   struct sl_global* host_global;
   struct wl_compositor* internal;
 };
@@ -206,15 +102,18 @@ struct sl_host_pointer {
   struct wl_resource* resource;
   struct wl_pointer* proxy;
   struct wl_resource* focus_resource;
+  struct sl_host_surface* focus_surface;
   struct wl_listener focus_resource_listener;
   uint32_t focus_serial;
+  uint32_t time;
+  wl_fixed_t axis_delta[2];
+  int32_t axis_discrete[2];
 };
 
 struct sl_relative_pointer_manager {
   struct sl_context* ctx;
   uint32_t id;
   struct sl_global* host_global;
-  struct zwp_relative_pointer_manager_v1* internal;
 };
 
 struct sl_viewport {
@@ -237,26 +136,44 @@ struct sl_host_surface {
   struct wl_resource* resource;
   struct wl_surface* proxy;
   struct wp_viewport* viewport;
+  struct wl_buffer* proxy_buffer;
   uint32_t contents_width;
   uint32_t contents_height;
+  uint32_t contents_shm_format;
   int32_t contents_scale;
+  int32_t contents_x_offset;
+  int32_t contents_y_offset;
+  double xdg_scale_x;
+  double xdg_scale_y;
+  bool scale_round_on_x;
+  bool scale_round_on_y;
   struct wl_list contents_viewport;
   struct sl_mmap* contents_shm_mmap;
+  bool contents_shaped;
+  pixman_region32_t contents_shape;
   int has_role;
   int has_output;
+  int has_own_scale;
+  int32_t cached_logical_width;
+  int32_t cached_logical_height;
   uint32_t last_event_serial;
   struct sl_output_buffer* current_buffer;
+  struct zwp_linux_surface_synchronization_v1* surface_sync;
   struct wl_list released_buffers;
   struct wl_list busy_buffers;
+  WeakResourcePtr<sl_host_output> output;
 };
+MAP_STRUCTS(wl_surface, sl_host_surface);
 
 struct sl_host_region {
   struct sl_context* ctx;
   struct wl_resource* resource;
   struct wl_region* proxy;
 };
+MAP_STRUCTS(wl_region, sl_host_region);
 
 struct sl_host_buffer {
+  struct sl_context* ctx;
   struct wl_resource* resource;
   struct wl_buffer* proxy;
   uint32_t width;
@@ -264,6 +181,7 @@ struct sl_host_buffer {
   struct sl_mmap* shm_mmap;
   uint32_t shm_format;
   struct sl_sync_point* sync_point;
+  bool is_drm;
 };
 
 struct sl_data_source_send_request {
@@ -290,19 +208,30 @@ struct sl_output {
   uint32_t id;
   uint32_t version;
   struct sl_global* host_global;
+  struct sl_host_output* host_output;
   struct wl_list link;
+};
+
+struct sl_xdg_output_manager {
+  struct sl_context* ctx;
+  uint32_t id;
+  uint32_t version;
+  struct zxdg_output_manager_v1* internal;
 };
 
 struct sl_host_output {
   struct sl_context* ctx;
   struct wl_resource* resource;
   struct wl_output* proxy;
+  struct zxdg_output_v1* zxdg_output;
   struct zaura_output* aura_output;
   int internal;
   int x;
   int y;
   int physical_width;
   int physical_height;
+  int scaled_physical_width;
+  int scaled_physical_height;
   int subpixel;
   char* make;
   char* model;
@@ -316,14 +245,40 @@ struct sl_host_output {
   int preferred_scale;
   int device_scale_factor;
   int expecting_scale;
+  bool expecting_logical_size;
+
+  // The scaling factors for direct mode
+  // virt_scale: Used to translate from physical space to virtual space
+  // xdg_scale: Used to translate from virtual space to logical space
+  //
+  // The logical space is defined by the host. It will be retrieved through
+  // the xdg_output_manager interface.
+  //
+  // All spaces, and by consequence all scale factors, will be unique to each
+  // particular output.
+  //
+  // For more details, see sommelier-transform.h
+
+  double virt_scale_x;
+  double virt_scale_y;
+  double xdg_scale_x;
+  double xdg_scale_y;
+  int virt_x;
+  int virt_y;
+  int32_t logical_width;
+  int32_t logical_height;
+  int32_t logical_x;
+  int32_t logical_y;
   struct wl_list link;
 };
+MAP_STRUCTS(wl_output, sl_host_output);
 
 struct sl_host_seat {
   struct sl_seat* seat;
   struct wl_resource* resource;
   struct wl_seat* proxy;
 };
+MAP_STRUCTS(wl_seat, sl_host_seat);
 
 struct sl_accelerator {
   struct wl_list link;
@@ -356,14 +311,27 @@ struct sl_text_input_manager {
   struct sl_context* ctx;
   uint32_t id;
   struct sl_global* host_global;
-  struct zwp_text_input_manager_v1* internal;
+  struct sl_global* host_x11_global;
 };
+
+struct sl_text_input_extension {
+  struct sl_context* ctx;
+  uint32_t id;
+  struct sl_global* host_global;
+};
+
+#ifdef GAMEPAD_SUPPORT
+struct sl_gaming_input_manager {
+  struct sl_context* ctx;
+  uint32_t id;
+  struct zcr_gaming_input_v2* internal;
+};
+#endif
 
 struct sl_pointer_constraints {
   struct sl_context* ctx;
   uint32_t id;
   struct sl_global* host_global;
-  struct zwp_pointer_constraints_v1* internal;
 };
 
 struct sl_viewporter {
@@ -377,7 +345,7 @@ struct sl_xdg_shell {
   struct sl_context* ctx;
   uint32_t id;
   struct sl_global* host_global;
-  struct zxdg_shell_v6* internal;
+  struct xdg_wm_base* internal;
 };
 
 struct sl_aura_shell {
@@ -396,6 +364,12 @@ struct sl_linux_dmabuf {
   struct zwp_linux_dmabuf_v1* internal;
 };
 
+struct sl_linux_explicit_synchronization {
+  struct sl_context* ctx;
+  uint32_t id;
+  struct zwp_linux_explicit_synchronization_v1* internal;
+};
+
 struct sl_global {
   struct sl_context* ctx;
   const struct wl_interface* interface;
@@ -412,22 +386,6 @@ struct sl_host_registry {
   struct wl_list link;
 };
 
-typedef void (*sl_begin_end_access_func_t)(int fd);
-
-struct sl_mmap {
-  int refcount;
-  int fd;
-  void* addr;
-  size_t size;
-  size_t bpp;
-  size_t num_planes;
-  size_t offset[2];
-  size_t stride[2];
-  size_t y_ss[2];
-  sl_begin_end_access_func_t begin_write;
-  sl_begin_end_access_func_t end_write;
-  struct wl_resource* buffer_resource;
-};
 
 typedef void (*sl_sync_func_t)(struct sl_context* ctx,
                                struct sl_sync_point* sync_point);
@@ -437,65 +395,30 @@ struct sl_sync_point {
   sl_sync_func_t sync;
 };
 
-struct sl_config {
-  uint32_t serial;
-  uint32_t mask;
-  uint32_t values[5];
-  uint32_t states_length;
-  uint32_t states[3];
-};
-
-struct sl_window {
+#ifdef GAMEPAD_SUPPORT
+struct sl_host_gamepad {
   struct sl_context* ctx;
-  xcb_window_t id;
-  xcb_window_t frame_id;
-  uint32_t host_surface_id;
-  int unpaired;
-  int x;
-  int y;
-  int width;
-  int height;
-  int border_width;
-  int depth;
-  int managed;
-  int realized;
-  int activated;
-  int maximized;
-  int allow_resize;
-  xcb_window_t transient_for;
-  xcb_window_t client_leader;
-  int decorated;
-  char* name;
-  char* clazz;
-  char* startup_id;
-  int dark_frame;
-  uint32_t size_flags;
-  int min_width;
-  int min_height;
-  int max_width;
-  int max_height;
-  struct sl_config next_config;
-  struct sl_config pending_config;
-  struct zxdg_surface_v6* xdg_surface;
-  struct zxdg_toplevel_v6* xdg_toplevel;
-  struct zxdg_popup_v6* xdg_popup;
-  struct zaura_surface* aura_surface;
+  int state;
+  struct libevdev* ev_dev;
+  struct libevdev_uinput* uinput_dev;
+  bool axes_quirk;
   struct wl_list link;
 };
+#endif
 
-struct sl_host_buffer* sl_create_host_buffer(struct wl_client* client,
+struct sl_host_buffer* sl_create_host_buffer(struct sl_context* ctx,
+                                             struct wl_client* client,
                                              uint32_t id,
                                              struct wl_buffer* proxy,
                                              int32_t width,
-                                             int32_t height);
-
-struct sl_global* sl_global_create(struct sl_context* ctx,
-                                   const struct wl_interface* interface,
-                                   int version,
-                                   void* data,
-                                   wl_global_bind_func_t bind);
+                                             int32_t height,
+                                             bool is_drm);
 
 struct sl_global* sl_compositor_global_create(struct sl_context* ctx);
+void sl_compositor_init_context(struct sl_context* ctx,
+                                struct wl_registry* registry,
+                                uint32_t id,
+                                uint32_t version);
 
 size_t sl_shm_bpp_for_shm_format(uint32_t format);
 
@@ -528,24 +451,16 @@ struct sl_global* sl_gtk_shell_global_create(struct sl_context* ctx);
 
 struct sl_global* sl_drm_global_create(struct sl_context* ctx);
 
+struct sl_global* sl_text_input_extension_global_create(struct sl_context* ctx);
+
 struct sl_global* sl_text_input_manager_global_create(struct sl_context* ctx);
+
+struct sl_global* sl_text_input_x11_global_create(struct sl_context* ctx);
 
 struct sl_global* sl_pointer_constraints_global_create(struct sl_context* ctx);
 
-void sl_set_display_implementation(struct sl_context* ctx);
-
-struct sl_mmap* sl_mmap_create(int fd,
-                               size_t size,
-                               size_t bpp,
-                               size_t num_planes,
-                               size_t offset0,
-                               size_t stride0,
-                               size_t offset1,
-                               size_t stride1,
-                               size_t y_ss0,
-                               size_t y_ss1);
-struct sl_mmap* sl_mmap_ref(struct sl_mmap* map);
-void sl_mmap_unref(struct sl_mmap* map);
+void sl_set_display_implementation(struct sl_context* ctx,
+                                   struct wl_client* client);
 
 struct sl_sync_point* sl_sync_point_create(int fd);
 void sl_sync_point_destroy(struct sl_sync_point* sync_point);
@@ -557,9 +472,48 @@ void sl_restack_windows(struct sl_context* ctx, uint32_t focus_resource_id);
 
 void sl_roundtrip(struct sl_context* ctx);
 
-int sl_process_pending_configure_acks(struct sl_window* window,
-                                      struct sl_host_surface* host_surface);
 
-void sl_window_update(struct sl_window* window);
+struct sl_window* sl_lookup_window(struct sl_context* ctx, xcb_window_t id);
+int sl_is_our_window(struct sl_context* ctx, xcb_window_t id);
+
+// Exported for testing
+void sl_handle_destroy_notify(struct sl_context* ctx,
+                              xcb_destroy_notify_event_t* event);
+void sl_handle_reparent_notify(struct sl_context* ctx,
+                               xcb_reparent_notify_event_t* event);
+void sl_handle_map_request(struct sl_context* ctx,
+                           xcb_map_request_event_t* event);
+void sl_handle_unmap_notify(struct sl_context* ctx,
+                            xcb_unmap_notify_event_t* event);
+void sl_handle_configure_request(struct sl_context* ctx,
+                                 xcb_configure_request_event_t* event);
+void sl_handle_property_notify(struct sl_context* ctx,
+                               xcb_property_notify_event_t* event);
+void sl_create_window(struct sl_context* ctx,
+                      xcb_window_t id,
+                      int x,
+                      int y,
+                      int width,
+                      int height,
+                      int border_width);
+void sl_handle_client_message(struct sl_context* ctx,
+                              xcb_client_message_event_t* event);
+void sl_handle_focus_in(struct sl_context* ctx, xcb_focus_in_event_t* event);
+
+uint32_t sl_drm_format_for_shm_format(int format);
+int sl_shm_format_for_drm_format(uint32_t drm_format);
+
+#ifdef GAMEPAD_SUPPORT
+void sl_gaming_seat_add_listener(struct sl_context* ctx);
+#endif
+
+bool sl_client_supports_interface(const sl_context* ctx,
+                                  const wl_client* client,
+                                  const wl_interface* interface);
+
+#define sl_array_for_each(pos, array)                                   \
+  for (pos = static_cast<decltype(pos)>((array)->data);                 \
+       (const char*)pos < ((const char*)(array)->data + (array)->size); \
+       (pos)++)
 
 #endif  // VM_TOOLS_SOMMELIER_SOMMELIER_H_
