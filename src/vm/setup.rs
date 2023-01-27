@@ -127,7 +127,7 @@ impl <T: ArchSetup> VmSetup <T> {
         devices::VirtioRandom::create(virtio)?;
 
         if self.config.is_wayland_enabled() {
-            devices::VirtioWayland::create(virtio)?;
+            devices::VirtioWayland::create(virtio, self.config.is_dmabuf_enabled())?;
         }
 
         let homedir = self.config.homedir();

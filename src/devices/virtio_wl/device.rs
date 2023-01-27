@@ -1,4 +1,4 @@
-use std::os::unix::io::{AsRawFd,RawFd};
+use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::{RwLock, Arc};
 use std::thread;
 
@@ -20,15 +20,16 @@ const DMA_BUF_IOCTL_SYNC: c_ulong = iow!(DMA_BUF_IOCTL_BASE, 0, ::std::mem::size
 
 pub struct VirtioWayland {
     feature_bits: u64,
+    enable_dmabuf: bool,
 }
 
 impl VirtioWayland {
-    fn new() -> Self {
-        VirtioWayland { feature_bits: 0 }
+    fn new(enable_dmabuf: bool) -> Self {
+        VirtioWayland { feature_bits: 0, enable_dmabuf }
     }
 
-    pub fn create(vbus: &mut VirtioBus) -> virtio::Result<()> {
-        let dev = Arc::new(RwLock::new(VirtioWayland::new()));
+    pub fn create(vbus: &mut VirtioBus, dmabuf: bool) -> virtio::Result<()> {
+        let dev = Arc::new(RwLock::new(VirtioWayland::new(dmabuf)));
         vbus.new_virtio_device(VIRTIO_ID_WL, dev)
             .set_num_queues(2)
             .set_features(VIRTIO_WL_F_TRANS_FLAGS as u64)
@@ -39,9 +40,9 @@ impl VirtioWayland {
         self.feature_bits & VIRTIO_WL_F_TRANS_FLAGS as u64 != 0
     }
 
-    fn create_device(memory: MemoryManager, in_vq: VirtQueue, out_vq: VirtQueue, transition: bool) -> Result<WaylandDevice> {
+    fn create_device(memory: MemoryManager, in_vq: VirtQueue, out_vq: VirtQueue, transition: bool, enable_dmabuf: bool) -> Result<WaylandDevice> {
         let kill_evt = EventFd::new().map_err(Error::EventFdCreate)?;
-        let dev = WaylandDevice::new(memory, in_vq, out_vq, kill_evt, transition)?;
+        let dev = WaylandDevice::new(memory, in_vq, out_vq, kill_evt, transition, enable_dmabuf)?;
         Ok(dev)
     }
 }
@@ -56,10 +57,11 @@ impl VirtioDeviceOps for VirtioWayland {
         thread::spawn({
             let memory = memory.clone();
             let transition = self.transition_flags();
+            let enable_dmabuf = self.enable_dmabuf;
             move || {
                 let out_vq = queues.pop().unwrap();
                 let in_vq = queues.pop().unwrap();
-                let mut dev = match Self::create_device(memory.clone(), in_vq, out_vq,transition) {
+                let mut dev = match Self::create_device(memory.clone(), in_vq, out_vq,transition, enable_dmabuf) {
                     Err(e) => {
                         warn!("Error creating virtio wayland device: {}", e);
                         return;
@@ -78,6 +80,7 @@ struct WaylandDevice {
     vfd_manager: VfdManager,
     out_vq: VirtQueue,
     kill_evt: EventFd,
+    enable_dmabuf: bool,
 }
 
 impl WaylandDevice {
@@ -86,12 +89,13 @@ impl WaylandDevice {
     const KILL_TOKEN: u64 = 2;
     const VFDS_TOKEN: u64 = 3;
 
-    fn new(mm: MemoryManager, in_vq: VirtQueue, out_vq: VirtQueue, kill_evt: EventFd, use_transition: bool) -> Result<Self> {
+    fn new(mm: MemoryManager, in_vq: VirtQueue, out_vq: VirtQueue, kill_evt: EventFd, use_transition: bool, enable_dmabuf: bool) -> Result<Self> {
         let vfd_manager = VfdManager::new(mm, use_transition, in_vq, "/run/user/1000/wayland-0")?;
         Ok(WaylandDevice {
             vfd_manager,
             out_vq,
-            kill_evt
+            kill_evt,
+            enable_dmabuf,
         })
     }
 
@@ -130,7 +134,7 @@ impl WaylandDevice {
                     Self::OUT_VQ_TOKEN => {
                         self.out_vq.ioevent().read().map_err(Error::IoEventError)?;
                         if let Some(chain) = self.out_vq.next_chain() {
-                            let mut handler = MessageHandler::new(self, chain);
+                            let mut handler = MessageHandler::new(self, chain, self.enable_dmabuf);
                             match handler.run() {
                                 Ok(()) => {
                                 },
@@ -158,29 +162,37 @@ struct MessageHandler<'a> {
     device: &'a mut WaylandDevice,
     chain: Chain,
     responded: bool,
+    enable_dmabuf: bool,
 }
 
 impl <'a> MessageHandler<'a> {
 
-    fn new(device: &'a mut WaylandDevice, chain: Chain) -> Self {
-        MessageHandler { device, chain, responded: false }
+    fn new(device: &'a mut WaylandDevice, chain: Chain, enable_dmabuf: bool) -> Self {
+        MessageHandler { device, chain, responded: false, enable_dmabuf }
     }
 
     fn run(&mut self) -> Result<()> {
         let msg_type = self.chain.r32()?;
         // Flags are always zero
         let _flags = self.chain.r32()?;
+
         match msg_type {
             VIRTIO_WL_CMD_VFD_NEW => self.cmd_new_alloc(),
             VIRTIO_WL_CMD_VFD_CLOSE => self.cmd_close(),
             VIRTIO_WL_CMD_VFD_SEND => self.cmd_send(),
-            VIRTIO_WL_CMD_VFD_NEW_DMABUF => self.cmd_new_dmabuf(),
-            VIRTIO_WL_CMD_VFD_DMABUF_SYNC => self.cmd_dmabuf_sync(),
+            VIRTIO_WL_CMD_VFD_NEW_DMABUF  if self.enable_dmabuf => self.cmd_new_dmabuf(),
+            VIRTIO_WL_CMD_VFD_DMABUF_SYNC if self.enable_dmabuf => self.cmd_dmabuf_sync(),
             VIRTIO_WL_CMD_VFD_NEW_CTX => self.cmd_new_ctx(),
             VIRTIO_WL_CMD_VFD_NEW_PIPE => self.cmd_new_pipe(),
             v => {
                 self.send_invalid_command()?;
-                Err(Error::UnexpectedCommand(v))
+                if v == VIRTIO_WL_CMD_VFD_NEW_DMABUF && !self.enable_dmabuf {
+                    // Sommelier probes this command to determine if dmabuf is supported
+                    // so if dmabuf is not enabled don't throw an error.
+                    Ok(())
+                } else {
+                    Err(Error::UnexpectedCommand(v))
+                }
             },
         }
     }
