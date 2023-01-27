@@ -14,7 +14,7 @@ mod device;
 mod consts {
     use std::mem;
 
-    pub const VIRTIO_ID_WL: u16 = 30;
+    pub const VIRTIO_ID_WL: u16 = 63;
     pub const VIRTWL_SEND_MAX_ALLOCS: usize = 28;
     pub const VIRTIO_WL_CMD_VFD_NEW: u32 = 256;
     pub const VIRTIO_WL_CMD_VFD_CLOSE: u32 = 257;
