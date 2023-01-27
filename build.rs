@@ -5,10 +5,12 @@ use std::process::Command;
 
 fn main() -> Result<()> {
     build_phinit()?;
-    run_simple_make("sommelier")?;
-    run_simple_make("kernel")?;
+    build_kernel()?;
+    build_sommelier()?;
     // Rerun build.rs upon making or pulling in new commits
     println!("cargo:rerun-if-changed=.git/refs/heads/master");
+    println!("cargo:rerun-if-changed=ph-init/src");
+    println!("cargo:rerun-if-changed=build.rs");
     Ok(())
 }
 
@@ -27,9 +29,30 @@ fn build_phinit() -> Result<()> {
     Ok(())
 }
 
-fn run_simple_make<P: AsRef<Path>>(directory: P) -> Result<()> {
-    let _dir = ChdirTo::path(directory);
-    Command::new("make").status()?;
+fn build_kernel() -> Result<()> {
+    Command::new("make")
+        .arg("-C")
+        .arg("kernel")
+        .status()?;
+
+    Ok(())
+}
+
+fn build_sommelier() -> Result<()> {
+    Command::new("meson")
+        .arg("setup")
+        .arg("-Dxwayland_path=/usr/bin/Xwayland")
+        .arg("-Dxwayland_gl_driver_path=")
+        .arg("-Dwith_tests=false")
+        .arg("sommelier/build")
+        .arg("sommelier")
+        .status()?;
+
+    Command::new("meson")
+        .arg("compile")
+        .arg("-C")
+        .arg("sommelier/build")
+        .status()?;
     Ok(())
 }
 
