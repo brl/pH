@@ -89,7 +89,7 @@ impl InitServer {
     }
 
     pub fn setup_filesystem(&self) -> Result<()> {
-        mount_devtmpfs()?;
+        //mount_devtmpfs()?;
         mount_tmpfs("/tmp")?;
         mkdir("/tmp/sysroot")?;
         if self.rootfs.read_only() {
@@ -206,17 +206,10 @@ impl InitServer {
 
         self.services.insert(dbus.pid(), dbus);
 
-        let shm_driver = if self.cmdline.has_var("phinit.virtwl_dmabuf") {
-            "virtwl-dmabuf" 
-        } else {
-            "virtwl"
-        };
-
         let sommelier = ServiceLaunch::new("sommelier", "/opt/ph/usr/bin/sommelier")
             .base_environment()
             .uidgid(1000,1000)
-            .env("SOMMELIER_SHM_DRIVER", shm_driver)
-            .arg("--master")
+            .arg("--parent")
             .pipe_output()
             .launch()?;
 
