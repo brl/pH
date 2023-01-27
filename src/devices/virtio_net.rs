@@ -123,8 +123,8 @@ struct VirtioNetDevice {
     rx: VirtQueue,
     tx: VirtQueue,
     rx_bytes: usize,
-    rx_frame: [u8; MAX_BUFFER_SIZE],
-    tx_frame: [u8; MAX_BUFFER_SIZE],
+    rx_frame: Vec<u8>,
+    tx_frame: Vec<u8>,
 }
 
 impl VirtioNetDevice {
@@ -136,8 +136,8 @@ impl VirtioNetDevice {
             poll,
             tap_event_enabled: false,
             rx_bytes: 0,
-            rx_frame: [0; MAX_BUFFER_SIZE],
-            tx_frame: [0; MAX_BUFFER_SIZE],
+            rx_frame: vec![0; MAX_BUFFER_SIZE],
+            tx_frame: vec![0; MAX_BUFFER_SIZE],
         }
     }
 
