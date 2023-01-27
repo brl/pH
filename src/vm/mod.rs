@@ -1,6 +1,6 @@
 static KERNEL: &[u8] = include_bytes!("../../kernel/ph_linux");
 static PHINIT: &[u8] = include_bytes!("../../ph-init/target/release/ph-init");
-static SOMMELIER: &[u8] = include_bytes!("../../sommelier/sommelier");
+static SOMMELIER: &[u8] = include_bytes!("../../sommelier/build/sommelier");
 
 pub mod arch;
 mod run;
