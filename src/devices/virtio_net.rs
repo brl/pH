@@ -2,40 +2,35 @@ use crate::virtio::{VirtioDeviceOps, VirtQueue, VirtioBus, Chain};
 use crate::memory::MemoryManager;
 use crate::{system, virtio};
 use std::sync::{RwLock, Arc};
-use std::{fmt, result, thread, io};
+use std::{result, thread, io};
 use crate::system::{EPoll,Event};
 use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
 use crate::system::Tap;
 
+use thiserror::Error;
+
 const VIRTIO_ID_NET: u16 = 1;
 const MAC_ADDR_LEN: usize = 6;
 
-#[derive(Debug)]
+#[derive(Debug,Error)]
 pub enum Error {
+    #[error("Error writing to virtqueue chain: {0}")]
     ChainWrite(io::Error),
+    #[error("Error reading from virtqueue chain: {0}")]
     ChainRead(io::Error),
-    ChainIoEvent(system::Error),
+    #[error("Error reading from virtqueue ioevent: {0}")]
+    ChainIoEvent(io::Error),
+    #[error("Failed to set up Poll: {0}")]
     SetupPoll(system::Error),
+    #[error("Error reading from tap device: {0}")]
     TapRead(io::Error),
+    #[error("Error writing to tap device: {0}")]
     TapWrite(io::Error),
+    #[error("Poll wait returned error: {0}")]
     PollWait(system::Error),
 }
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use Error::*;
-        match self {
-            ChainWrite(err) => write!(f, "Error writing to virtqueue chain: {}", err),
-            ChainRead(err) => write!(f, "Error reading from virtqueue chain: {}", err),
-            ChainIoEvent(err) => write!(f, "Error reading from virtqueue ioevent: {}", err),
-            SetupPoll(e) => write!(f, "Failed to set up Poll: {}", e),
-            TapRead(e) => write!(f, "Error reading from tap device: {}", e),
-            TapWrite(e) => write!(f, "Error writing to tap device: {}", e),
-            PollWait(e) => write!(f, "Poll wait returned error: {}", e),
-        }
-    }
-}
 type Result<T> = result::Result<T, Error>;
 
 

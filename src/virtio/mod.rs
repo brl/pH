@@ -16,38 +16,30 @@ pub use self::chain::Chain;
 pub use self::device_config::DeviceConfigArea;
 
 use byteorder::{ByteOrder,LittleEndian};
-use std::{result, fmt};
-use crate::{system, kvm};
+use std::result;
+
+use thiserror::Error;
 
 pub type Result<T> = result::Result<T, Error>;
 
-#[derive(Debug)]
+#[derive(Debug,Error)]
 pub enum Error {
-    CreateEventFd(system::Error),
-    CreateIoEventFd(kvm::Error),
-    ReadIoEventFd(system::Error),
-    IrqFd(kvm::Error),
+    #[error("failed to create EventFd for VirtQueue: {0}")]
+    CreateEventFd(std::io::Error),
+    #[error("failed to create IoEventFd for VirtQueue: {0}")]
+    CreateIoEventFd(kvm_ioctls::Error),
+    #[error("failed to read from IoEventFd: {0}")]
+    ReadIoEventFd(std::io::Error),
+    #[error("VirtQueue: {0}")]
+    IrqFd(kvm_ioctls::Error),
+    #[error("vring not enabled")]
     VringNotEnabled,
+    #[error("vring descriptor table range is invalid 0x{0:x}")]
     VringRangeInvalid(u64),
+    #[error("vring avail ring range range is invalid 0x{0:x}")]
     VringAvailInvalid(u64),
+    #[error("vring used ring range is invalid 0x{0:x}")]
     VringUsedInvalid(u64),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use Error::*;
-        match self {
-            CreateIoEventFd(e) => write!(f, "failed to create IoEventFd for VirtQueue: {}", e),
-            CreateEventFd(e) => write!(f, "failed to create EventFd for VirtQueue: {}", e),
-            ReadIoEventFd(e) => write!(f, "failed to read from IoEventFd: {}", e),
-            IrqFd(e) => write!(f, "VirtQueue: {}", e),
-            VringNotEnabled => write!(f, "vring is not enabled"),
-            VringRangeInvalid(addr) => write!(f, "vring descriptor table range is invalid 0x{:x}", addr),
-            VringAvailInvalid(addr) => write!(f, "vring avail ring range range is invalid 0x{:x}", addr),
-            VringUsedInvalid(addr) => write!(f, "vring used ring range is invalid 0x{:x}", addr),
-
-        }
-    }
 }
 
 pub fn read_config_buffer(config: &[u8], offset: usize, size: usize) -> u64 {

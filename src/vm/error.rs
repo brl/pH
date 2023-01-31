@@ -1,48 +1,40 @@
 use std::{result, io};
-use std::fmt;
-use crate::{system, kvm, virtio};
+use kvm_ioctls::Cap;
+use crate::{system, virtio};
 use crate::system::netlink;
 use crate::vm::arch;
 
+use thiserror::Error;
 pub type Result<T> = result::Result<T, Error>;
 
-#[derive(Debug)]
+#[derive(Error,Debug)]
 pub enum Error {
-    CreateVmFailed(kvm::Error),
+    #[error("failed to open kvm instance: {0}")]
+    KvmOpenError(kvm_ioctls::Error),
+    #[error("failed to create VM file descriptor: {0}")]
+    VmFdOpenError(kvm_ioctls::Error),
+    #[error("error on KVM operation: {0}")]
+    KvmError(kvm_ioctls::Error),
+    #[error("unexpected KVM version")]
+    BadVersion,
+    #[error("kernel does not support a required kvm extension: {0:?}")]
+    MissingRequiredExtension(Cap),
+    #[error("error configuring VM: {0}")]
+    VmSetup(kvm_ioctls::Error),
+    #[error("memory mapping failed: {0}")]
     MappingFailed(system::Error),
+    #[error("error reading/restoring terminal state: {0}")]
     TerminalTermios(io::Error),
-    IoError(io::Error),
+    #[error("i/o error: {0}")]
+    IoError(#[from] io::Error),
+    #[error("{0}")]
     ArchError(arch::Error),
-    NetworkSetup(netlink::Error),
+    #[error("error setting up network: {0}")]
+    NetworkSetup(#[from] netlink::Error),
+    #[error("setting up boot fs failed: {0}")]
     SetupBootFs(io::Error),
+    #[error("setting up virtio devices failed: {0}")]
     SetupVirtio(virtio::Error),
-}
-
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Error::TerminalTermios(e) => write!(f, "error reading/restoring terminal state: {}", e),
-            Error::IoError(e) => write!(f, "i/o error: {}", e),
-            Error::NetworkSetup(e) => write!(f, "error setting up network: {}", e),
-            Error::CreateVmFailed(e) => write!(f, "call to create vm failed: {}", e),
-            Error::MappingFailed(e) => write!(f, "memory mapping failed: {}", e),
-            Error::SetupBootFs(e) => write!(f, "setting up boot fs failed: {}", e),
-            Error::SetupVirtio(e) => write!(f, "setting up virtio devices failed: {}", e),
-            Error::ArchError(e) => e.fmt(f),
-        }
-    }
-}
-
-impl From<io::Error> for Error {
-    fn from(err: io::Error) -> Error {
-        Error::IoError(err).into()
-    }
-
-}
-
-impl From<netlink::Error> for Error {
-    fn from(err: netlink::Error) -> Error {
-        Error::NetworkSetup(err).into()
-    }
+    #[error("failed to create Vcpu: {0}")]
+    CreateVcpu(kvm_ioctls::Error),
 }

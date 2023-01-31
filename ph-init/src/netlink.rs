@@ -2,9 +2,11 @@ use std::cell::Cell;
 use std::convert::TryInto;
 use std::ffi::CString;
 use std::net::Ipv4Addr;
-use std::{mem, result, fmt, io};
+use std::{mem, result, io};
 use std::os::unix::io::RawFd;
 use std::path::Path;
+
+use thiserror::Error;
 
 use libc::{
     PF_NETLINK, SOCK_RAW, SOCK_CLOEXEC, SOCK_NONBLOCK
@@ -54,32 +56,24 @@ pub const IFF_UP: u32 = libc::IFF_UP as u32;
 
 pub type Result<T> = result::Result<T, Error>;
 
-#[derive(Debug)]
+#[derive(Debug,Error)]
 pub enum Error {
+    #[error("failed to create netlink socket: {0}")]
     Socket(io::Error),
+    #[error("failed calling bind() on netlink socket: {0}")]
     SocketBind(io::Error),
+    #[error("failed calling sendto() on netlink socket: {0}")]
     SocketSend(io::Error),
+    #[error("failed calling recv() on netlink socket: {0}")]
     SocketRecv(io::Error),
+    #[error("failed to convert interface name to index: {0}")]
     NameToIndex(io::Error),
+    #[error("error response to netlink request: {0}")]
     ErrorResponse(io::Error),
+    #[error("could not parse response message from netlink")]
     UnexpectedResponse,
+    #[error("failed to transmit entire netlink message")]
     ShortSend,
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use Error::*;
-        match self {
-            Socket(e) => write!(f, "failed to create netlink socket: {}", e),
-            SocketBind(e) => write!(f, "failed calling bind() on netlink socket: {}", e),
-            SocketSend(e) => write!(f, "failed calling sendto() on netlink socket: {}", e),
-            SocketRecv(e) => write!(f, "failed calling recv() on netlink socket: {}", e),
-            NameToIndex(e) => write!(f, "failed to convert interface name to index: {}", e),
-            ErrorResponse(e) => write!(f, "error response to netlink request: {}", e),
-            UnexpectedResponse => write!(f, "could not parse response message from netlink"),
-            ShortSend => write!(f, "failed to transmit entire netlink message"),
-        }
-    }
 }
 
 pub struct NetlinkSocket {

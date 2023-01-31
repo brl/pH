@@ -1,4 +1,4 @@
-use std::{io, error, fmt, result, cmp};
+use std::{io, result, cmp};
 use std::fs::File;
 use std::os::linux::fs::MetadataExt;
 use std::io::{SeekFrom, Seek};
@@ -12,6 +12,7 @@ mod memory;
 pub use raw::RawDiskImage;
 pub use realmfs::RealmFSImage;
 use std::path::PathBuf;
+use thiserror::Error;
 
 const SECTOR_SIZE: usize = 512;
 
@@ -59,36 +60,26 @@ fn generate_disk_image_id(disk_file: &File) -> Vec<u8> {
 
 pub type Result<T> = result::Result<T, Error>;
 
-#[derive(Debug)]
+#[derive(Debug,Error)]
 pub enum Error {
+    #[error("attempted write to read-only device")]
     ReadOnly,
+    #[error("disk image {0} does not exist")]
     ImageDoesntExit(PathBuf),
+    #[error("failed to open disk image {0:?}: {1}")]
     DiskOpen(PathBuf,io::Error),
+    #[error("failed to open disk image {0} because the file is too short")]
     DiskOpenTooShort(PathBuf),
+    #[error("error reading from disk image: {0}")]
     DiskRead(io::Error),
+    #[error("error writing to disk image: {0}")]
     DiskWrite(io::Error),
+    #[error("error seeking to offset on disk image: {0}")]
     DiskSeek(io::Error),
+    #[error("attempt to access invalid sector offset {0}")]
     BadSectorOffset(u64),
+    #[error("failed to create memory overlay: {0}")]
     MemoryOverlayCreate(system::Error),
+    #[error("disk not open")]
     NotOpen,
-}
-
-impl error::Error for Error {}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use Error::*;
-        match self {
-            ReadOnly => write!(f, "attempted write to read-only device"),
-            ImageDoesntExit(path) => write!(f, "disk image {} does not exist", path.display()),
-            DiskOpen(path, err) => write!(f, "failed to open disk image {}: {}", path.display(), err),
-            DiskOpenTooShort(path) => write!(f, "failed to open disk image {} because file is too short", path.display()),
-            DiskRead(err) => write!(f, "error reading from disk image: {}", err),
-            DiskWrite(err) => write!(f, "error writing to disk image: {}", err),
-            DiskSeek(err) => write!(f, "error seeking to offset on disk image: {}", err),
-            BadSectorOffset(sector) => write!(f, "attempt to access invalid sector offset {}", sector),
-            MemoryOverlayCreate(err) => write!(f, "failed to create memory overlay: {}", err),
-            NotOpen => write!(f, "disk not open"),
-        }
-    }
 }

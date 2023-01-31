@@ -1,7 +1,6 @@
 #[macro_use]pub mod ioctl;
 mod epoll;
 mod errno;
-mod eventfd;
 mod socket;
 mod filedesc;
 mod memfd;
@@ -9,26 +8,34 @@ mod tap;
 pub mod netlink;
 
 pub use filedesc::{FileDesc, FileFlags};
-pub use eventfd::EventFd;
 pub use memfd::MemoryFd;
 pub use epoll::{EPoll,Event};
 pub use socket::ScmSocket;
 pub use netlink::NetlinkSocket;
 pub use tap::Tap;
-use std::{fmt, result, io};
+use std::{result, io};
 
 pub use errno::Error as ErrnoError;
 
+use thiserror::Error;
+
 pub type Result<T> = result::Result<T, Error>;
 
-#[derive(Debug)]
+#[derive(Debug,Error)]
 pub enum Error {
+    #[error("{0}")]
     Errno(errno::Error),
+    #[error("failed to open /dev/kvm: {0}")]
     OpenKvmFailed(errno::Error),
+    #[error("attempt to access invalid offset into mapping")]
     InvalidOffset,
+    #[error("attempt to access invalid address: {0:16x}")]
     InvalidAddress(u64),
+    #[error("failed to call {0} ioctl: {1}")]
     IoctlError(&'static str, errno::Error),
+    #[error("failed writing to eventfd")]
     EventFdWrite,
+    #[error("failed reading from eventfd")]
     EventFdRead,
 
 }
@@ -62,22 +69,6 @@ impl Error {
     }
 }
 
-impl std::error::Error for Error {}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use Error::*;
-        match self {
-            Errno(err) => err.fmt(f),
-            InvalidOffset => write!(f, "attempt to access invalid offset into mapping"),
-            InvalidAddress(addr) => write!(f, "attempt to access invalid address: {0:16x}", addr),
-            OpenKvmFailed(err) => write!(f, "failed to open /dev/kvm: {}", err),
-            IoctlError(name, err) => write!(f, "failed to call {} ioctl: {}", name, err),
-            EventFdWrite => write!(f, "failed writing to eventfd"),
-            EventFdRead => write!(f, "failed reading from eventfd"),
-        }
-    }
-}
 impl From<errno::Error> for Error {
     fn from(err: errno::Error) -> Error {
         Error::Errno(err)

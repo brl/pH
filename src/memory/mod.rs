@@ -13,39 +13,33 @@ pub use manager::MemoryManager;
 
 pub use drm::{DrmDescriptor,DrmPlaneDescriptor};
 
-use std::{result, fmt, io};
-use crate::{system, kvm};
+use std::{result, io};
+use crate::system;
 
-#[derive(Debug)]
+use thiserror::Error;
+
+#[derive(Debug,Error)]
 pub enum Error {
+    #[error("failed to allocate memory for device")]
     DeviceMemoryAllocFailed,
+    #[error("failed to create memory mapping for device memory: {0}")]
     MappingFailed(system::Error),
-    RegisterMemoryFailed(kvm::Error),
-    UnregisterMemoryFailed(kvm::Error),
+    #[error("failed to register memory for device memory: {0}")]
+    RegisterMemoryFailed(kvm_ioctls::Error),
+    #[error("failed to unregister memory for device memory: {0}")]
+    UnregisterMemoryFailed(kvm_ioctls::Error),
+    #[error("failed to open device with libgbm: {0}")]
     GbmCreateDevice(system::Error),
+    #[error("failed to allocate buffer with libgbm: {0}")]
     GbmCreateBuffer(system::Error),
+    #[error("error opening render node: {0}")]
     OpenRenderNode(io::Error),
+    #[error("exporting prime handle to fd failed: {0}")]
     PrimeHandleToFD(system::ErrnoError),
+    #[error("failed to create buffer: {0}")]
     CreateBuffer(io::Error),
+    #[error("no DRM allocator is available")]
     NoDrmAllocator,
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use Error::*;
-        match self {
-            DeviceMemoryAllocFailed => write!(f, "failed to allocate memory for device"),
-            MappingFailed(e) => write!(f, "failed to create memory mapping for device memory: {}", e),
-            RegisterMemoryFailed(e) => write!(f, "failed to register memory for device memory: {}", e),
-            UnregisterMemoryFailed(e) => write!(f, "failed to unregister memory for device memory: {}", e),
-            GbmCreateDevice(e) => write!(f, "failed to open device with libgbm: {}", e),
-            GbmCreateBuffer(e) => write!(f, "failed to allocate buffer with libgbm: {}", e),
-            PrimeHandleToFD(err) => write!(f, "exporting prime handle to fd failed: {}", err),
-            OpenRenderNode(err) => write!(f, "error opening render node: {}", err),
-            CreateBuffer(err) => write!(f, "failed to create buffer: {}", err),
-            NoDrmAllocator => write!(f, "no DRM allocator is available"),
-        }
-    }
 }
 
 pub type Result<T> = result::Result<T, Error>;

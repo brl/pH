@@ -1,11 +1,13 @@
 use std::io::Write;
 use std::sync::{RwLock, Arc};
-use std::{result, io, fmt, thread};
+use std::{result, io, thread};
 
 use crate::{disk, virtio};
 use crate::virtio::{VirtioBus, VirtioDeviceOps, VirtQueue, DeviceConfigArea, Chain};
 use crate::memory::MemoryManager;
 use crate::disk::DiskImage;
+
+use thiserror::Error;
 
 const VIRTIO_BLK_F_RO: u64 = 1 << 5;
 const VIRTIO_BLK_F_BLK_SIZE: u64 = 1 << 6;
@@ -26,34 +28,22 @@ const SECTOR_SIZE: usize = 1 << SECTOR_SHIFT;
 
 const QUEUE_SIZE: usize = 256;
 
+#[derive(Debug,Error)]
 enum Error {
-    IoChainError(io::Error),
+    #[error("i/o error on virtio chain operation: {0}")]
+    IoChainError(#[from] io::Error),
+    #[error("error reading disk image: {0}")]
     DiskRead(disk::Error),
+    #[error("error writing disk image: {0}")]
     DiskWrite(disk::Error),
+    #[error("error flushing disk image: {0}")]
     DiskFlush(disk::Error),
+    #[error("error waiting on virtqueue: {0}")]
     VirtQueueWait(virtio::Error),
+    #[error("virtqueue read descriptor size ({0}) is invalid. Not a multiple of sector size")]
     InvalidReadDescriptor(usize),
 }
 
-impl From<io::Error> for Error {
-    fn from(e: io::Error) -> Self {
-        Error::IoChainError(e)
-    }
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use Error::*;
-        match self {
-            IoChainError(e) => write!(f, "i/o error on virtio chain operation: {}", e),
-            DiskRead(e) => write!(f, "error reading disk image: {}", e),
-            DiskWrite(e) => write!(f, "error writing disk image: {}", e),
-            DiskFlush(e) => write!(f, "error flushing disk image: {}", e),
-            VirtQueueWait(e) =>write!(f, "error waiting on virtqueue: {}", e),
-            InvalidReadDescriptor(sz) => write!(f, "virtqueue read descriptor size ({}) is invalid. Not a multiple of sector size", sz),
-        }
-    }
-}
 type Result<T> = result::Result<T, Error>;
 
 pub struct VirtioBlock<D: DiskImage+'static> {

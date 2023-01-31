@@ -1,5 +1,7 @@
 use std::os::unix::io::RawFd;
-use std::{result, io, fmt};
+use std::{result, io};
+
+use thiserror::Error;
 
 use crate::system;
 use crate::memory::Error as MemError;
@@ -80,56 +82,42 @@ pub trait VfdObject {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug,Error)]
 pub enum Error {
-    IoEventError(system::Error),
-    EventFdCreate(system::Error),
-    ChainIoError(io::Error),
+    #[error("error reading from ioevent fd: {0}")]
+    IoEventError(io::Error),
+    #[error("error creating eventfd: {0}")]
+    EventFdCreate(io::Error),
+    #[error("i/o error on virtio chain operation: {0}")]
+    ChainIoError(#[from] io::Error),
+    #[error("unexpected virtio wayland command: {0}")]
     UnexpectedCommand(u32),
+    #[error("failed to allocate shared memory: {0}")]
     ShmAllocFailed(system::Error),
+    #[error("failed to register memory with hypervisor: {0}")]
     RegisterMemoryFailed(MemError),
+    #[error("failed to create pipes: {0}")]
     CreatePipesFailed(system::Error),
+    #[error("error reading from socket: {0}")]
     SocketReceive(system::ErrnoError),
+    #[error("error connecting to socket: {0}")]
     SocketConnect(io::Error),
+    #[error("error reading from pipe: {0}")]
     PipeReceive(io::Error),
+    #[error("error writing to vfd: {0}")]
     SendVfd(io::Error),
+    #[error("attempt to send to incorrect vfd type")]
     InvalidSendVfd,
+    #[error("message has too many vfd ids: {0}")]
     TooManySendVfds(usize),
+    #[error("failed creating poll context: {0}")]
     FailedPollContextCreate(system::Error),
+    #[error("failed adding fd to poll context: {0}")]
     FailedPollAdd(system::Error),
+    #[error("error calling dma sync: {0}")]
     DmaSync(system::ErrnoError),
+    #[error("failed creating DMA buf: {0}")]
     DmaBuf(MemError),
+    #[error("failed creating DMA buf: {0}")]
     DmaBufSize(system::Error),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use Error::*;
-        match self {
-            IoEventError(e) => write!(f, "error reading from ioevent fd: {}", e),
-            EventFdCreate(e) => write!(f, "error creating eventfd: {}", e),
-            ChainIoError(e) => write!(f, "i/o error on virtio chain operation: {}", e),
-            UnexpectedCommand(cmd) => write!(f, "unexpected virtio wayland command: {}", cmd),
-            ShmAllocFailed(e) => write!(f, "failed to allocate shared memory: {}", e),
-            RegisterMemoryFailed(e) => write!(f, "failed to register memory with hypervisor: {}", e),
-            CreatePipesFailed(e) => write!(f, "failed to create pipes: {}", e),
-            SocketReceive(e) => write!(f, "error reading from socket: {}", e),
-            SocketConnect(e) => write!(f, "error connecting to socket: {}", e),
-            PipeReceive(e) => write!(f, "error reading from pipe: {}", e),
-            SendVfd(e) => write!(f, "error writing to vfd: {}", e),
-            InvalidSendVfd => write!(f, "attempt to send to incorrect vfd type"),
-            TooManySendVfds(n) => write!(f, "message has too many vfd ids: {}", n),
-            FailedPollContextCreate(e) => write!(f, "failed creating poll context: {}", e),
-            FailedPollAdd(e) => write!(f, "failed adding fd to poll context: {}", e),
-            DmaSync(e) => write!(f, "error calling dma sync: {}", e),
-            DmaBuf(e) => write!(f, "failed creating DMA buf: {}", e),
-            DmaBufSize(e) => write!(f, "failed getting DMA buf size: {}", e),
-        }
-    }
-}
-
-impl From<io::Error> for Error {
-    fn from(e: io::Error) -> Self {
-        Error::ChainIoError(e)
-    }
 }
