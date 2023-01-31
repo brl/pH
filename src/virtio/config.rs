@@ -1,12 +1,13 @@
 use crate::memory::GuestRam;
 use std::sync::Arc;
+use kvm_ioctls::{IoEventAddress, NoDatamatch};
+use vmm_sys_util::eventfd::EventFd;
 
 use super::VirtQueue;
 use super::vring::Vring;
 use super::virtqueue::InterruptLine;
 use super::bus::VirtioDeviceConfig;
-use crate::virtio::{Result, Error};
-use crate::kvm::IoEventFd;
+use crate::virtio::{Error, Result};
 
 ///
 /// Manages a set of virtqueues during device intitialization.
@@ -17,7 +18,7 @@ pub struct VirtQueueConfig {
     enabled_features: u64,
     vrings: Vec<Vring>,
     interrupt: Arc<InterruptLine>,
-    events: Vec<Arc<IoEventFd>>,
+    events: Vec<Arc<EventFd>>,
 }
 
 impl VirtQueueConfig {
@@ -110,12 +111,15 @@ impl VirtQueueConfig {
     }
 }
 
-fn create_ioeventfds(conf: &VirtioDeviceConfig) -> Result<Vec<Arc<IoEventFd>>> {
+fn create_ioeventfds(conf: &VirtioDeviceConfig) -> Result<Vec<Arc<EventFd>>> {
     let mut v = Vec::with_capacity(conf.num_queues());
     let notify_base = conf.notify_mmio().base();
 
     for i in 0..conf.num_queues() {
-        let evt = IoEventFd::new(conf.kvm(), notify_base + (4 * i as u64))
+        let evt = EventFd::new(0)
+            .map_err(Error::CreateEventFd)?;
+        let addr = IoEventAddress::Mmio(notify_base + (4 * i as u64));
+        conf.kvm_vm().vm_fd().register_ioevent(&evt, &addr, NoDatamatch)
             .map_err(Error::CreateIoEventFd)?;
         v.push(Arc::new(evt));
     }

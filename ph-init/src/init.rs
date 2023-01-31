@@ -226,7 +226,6 @@ impl InitServer {
         let sommelierx = ServiceLaunch::new("sommelier-x", "/opt/ph/usr/bin/sommelier")
             .base_environment()
             .uidgid(1000,1000)
-            .env("SOMMELIER_SHM_DRIVER", shm_driver)
             .arg("-X")
             .arg("--x-display=0")
             .arg("--no-exit-with-child")

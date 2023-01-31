@@ -1,29 +1,27 @@
 use std::sync::atomic::{Ordering, AtomicUsize, AtomicBool};
 use std::sync::Arc;
-use std::os::unix::io::AsRawFd;
+use vmm_sys_util::eventfd::EventFd;
 
 use crate::memory::GuestRam;
-use crate::kvm::Kvm;
 use crate::virtio::{Result,Error};
-use crate::system::EventFd;
-use crate::kvm::IoEventFd;
 use super::consts::*;
 use super::vring::{Vring,Descriptor};
 use super::bus::VirtioDeviceConfig;
 use crate::virtio::chain::Chain;
+use crate::vm::KvmVm;
 
 #[derive(Clone)]
 pub struct VirtQueue {
     memory: GuestRam,
     vring: Vring,
     features: u64,
-    ioeventfd: Arc<IoEventFd>,
+    ioeventfd: Arc<EventFd>,
     interrupt: Arc<InterruptLine>,
     closed: Arc<AtomicBool>,
 }
 
 impl VirtQueue {
-    pub fn new(memory: GuestRam, vring: Vring, interrupt: Arc<InterruptLine>, ioeventfd: Arc<IoEventFd>) -> VirtQueue {
+    pub fn new(memory: GuestRam, vring: Vring, interrupt: Arc<InterruptLine>, ioeventfd: Arc<EventFd>) -> VirtQueue {
         VirtQueue {
             memory,
             vring,
@@ -120,7 +118,7 @@ impl VirtQueue {
         self.vring.load_descriptor(idx)
     }
 
-    pub fn ioevent(&self) -> &IoEventFd {
+    pub fn ioevent(&self) -> &EventFd {
         &self.ioeventfd
     }
 }
@@ -147,12 +145,13 @@ pub struct InterruptLine {
 
 impl InterruptLine {
     pub fn from_config(conf: &VirtioDeviceConfig) -> Result<Arc<InterruptLine>> {
-        InterruptLine::new(conf.kvm(), conf.irq())
+        InterruptLine::new(conf.kvm_vm(), conf.irq())
     }
 
-    fn new(kvm: &Kvm, irq: u8) -> Result<Arc<InterruptLine>> {
-        let irqfd = EventFd::new().map_err(Error::CreateEventFd)?;
-        kvm.irqfd(irqfd.as_raw_fd() as u32, irq as u32)
+    fn new(kvm_vm: &KvmVm, irq: u8) -> Result<Arc<InterruptLine>> {
+        let irqfd = EventFd::new(0)
+            .map_err(Error::CreateEventFd)?;
+        kvm_vm.vm_fd().register_irqfd(&irqfd, irq as u32)
             .map_err(Error::IrqFd)?;
         Ok(Arc::new(InterruptLine{
             irqfd,

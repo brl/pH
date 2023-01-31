@@ -1,4 +1,3 @@
-use crate::kvm::Kvm;
 use crate::memory::{MemoryManager, MemoryRegion, GuestRam};
 use crate::vm::arch::{Error, Result};
 use std::cmp;
@@ -7,6 +6,7 @@ use crate::vm::arch::x86::kernel::{load_pm_kernel, KERNEL_CMDLINE_ADDRESS};
 use crate::system;
 use crate::vm::arch::x86::mptable::setup_mptable;
 use crate::virtio::PciIrq;
+use crate::vm::KvmVm;
 
 pub const HIMEM_BASE: u64 = 1 << 32;
 pub const PCI_MMIO_RESERVED_SIZE: usize = 512 << 20;
@@ -16,20 +16,20 @@ pub const PCI_MMIO_RESERVED_BASE: u64 = HIMEM_BASE - PCI_MMIO_RESERVED_SIZE as u
 pub fn x86_setup_memory_regions(memory: &mut MemoryManager, ram_size: usize) -> Result<()> {
     let mut regions = Vec::new();
     let lowmem_sz = cmp::min(ram_size, PCI_MMIO_RESERVED_BASE as usize);
-    regions.push(create_region(memory.kvm(),  0, lowmem_sz, 0)?);
+    regions.push(create_region(memory.kvm_vm(),  0, lowmem_sz, 0)?);
 
     if lowmem_sz < ram_size {
         let himem_sz = ram_size - lowmem_sz;
-        regions.push(create_region(memory.kvm(), HIMEM_BASE, himem_sz, 1)?);
+        regions.push(create_region(memory.kvm_vm(), HIMEM_BASE, himem_sz, 1)?);
     }
     memory.set_ram_regions(regions);
     Ok(())
 }
 
-fn create_region(kvm: &Kvm, base: u64, size: usize, slot: u32) -> Result<MemoryRegion> {
+fn create_region(kvm_vm: &KvmVm, base: u64, size: usize, slot: u32) -> Result<MemoryRegion> {
     let mr = MemoryRegion::new(base, size)
         .map_err(Error::MemoryRegionCreate)?;
-    kvm.add_memory_region(slot, base, mr.base_address(), size)
+    kvm_vm.add_memory_region(slot, base, mr.base_address(), size)
         .map_err(Error::MemoryRegister)?;
     Ok(mr)
 }

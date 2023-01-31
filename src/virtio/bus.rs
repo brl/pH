@@ -1,16 +1,16 @@
 use std::sync::{Arc,RwLock};
 use crate::vm::io::IoDispatcher;
-use crate::kvm::Kvm;
 use crate::memory::{AddressRange, MemoryManager};
 use super::{VirtioDevice,VirtioDeviceOps,PciIrq};
 use super::consts::*;
 use super::pci::PciBus;
 use crate::virtio::Result;
 use std::iter;
+use crate::vm::KvmVm;
 
 
 pub struct VirtioBus {
-    kvm: Kvm,
+    kvm_vm: KvmVm,
     memory: MemoryManager,
     io_dispatcher: Arc<IoDispatcher>,
     pci_bus: Arc<RwLock<PciBus>>,
@@ -18,9 +18,9 @@ pub struct VirtioBus {
 }
 
 impl VirtioBus {
-    pub fn new(memory: MemoryManager, io_dispatcher: Arc<IoDispatcher>, kvm: Kvm) -> VirtioBus {
+    pub fn new(memory: MemoryManager, io_dispatcher: Arc<IoDispatcher>, kvm_vm: KvmVm) -> VirtioBus {
         VirtioBus {
-            kvm,
+            kvm_vm,
             memory,
             io_dispatcher: io_dispatcher.clone(),
             pci_bus: PciBus::new(&io_dispatcher),
@@ -41,7 +41,7 @@ pub struct VirtioDeviceConfig<'a> {
     virtio_bus: &'a mut VirtioBus,
     device_type: u16,
     irq: u8,
-    kvm: Kvm,
+    kvm_vm: KvmVm,
     ops: Arc<RwLock<dyn VirtioDeviceOps>>,
     mmio: AddressRange,
     queue_sizes: Vec<usize>,
@@ -53,13 +53,13 @@ pub struct VirtioDeviceConfig<'a> {
 
 impl <'a> VirtioDeviceConfig<'a> {
     fn new(virtio_bus: &mut VirtioBus, device_type: u16, ops: Arc<RwLock<dyn VirtioDeviceOps>>) -> VirtioDeviceConfig {
-        let kvm = virtio_bus.kvm.clone();
+        let kvm_vm = virtio_bus.kvm_vm.clone();
         let mmio = virtio_bus.pci_bus.write().unwrap().allocate_mmio_space(VIRTIO_MMIO_AREA_SIZE);
         VirtioDeviceConfig {
             virtio_bus,
             device_type,
             irq: 0,
-            kvm,
+            kvm_vm,
             ops,
             mmio,
             queue_sizes: Vec::new(),
@@ -69,7 +69,7 @@ impl <'a> VirtioDeviceConfig<'a> {
         }
     }
 
-    pub fn kvm(&self) -> &Kvm { &self.kvm }
+    pub fn kvm_vm(&self) -> &KvmVm { &self.kvm_vm }
 
     pub fn ops(&self) -> Arc<RwLock<dyn VirtioDeviceOps>> {
         self.ops.clone()

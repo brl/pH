@@ -7,7 +7,6 @@ pub mod util;
 mod vm;
 mod memory;
 mod devices;
-mod kvm;
 mod virtio;
 mod disk;
 

@@ -70,7 +70,7 @@ pub fn move_mount(source: &str, target: &str) -> Result<()> {
 }
 
 pub fn mount_9p(name: &str, target: &str) -> Result<()> {
-    const MS_LAZYTIME: libc::c_ulong = (1 << 25);
+    const MS_LAZYTIME: libc::c_ulong = 1 << 25;
     mount(name, target, "9p",
           libc::MS_NOATIME|MS_LAZYTIME,
           Some("trans=virtio,cache=loose"))

@@ -10,41 +10,47 @@ use crate::devices::SyntheticFS;
 use std::{fs, thread};
 use crate::system::{Tap, NetlinkSocket};
 use crate::disk::DiskImage;
-use crate::kvm::{KvmVcpu, Kvm};
 use std::sync::Arc;
 use crate::memory::MemoryManager;
 use std::sync::atomic::AtomicBool;
-use crate::vm::run::KvmRunArea;
+use kvm_ioctls::VmFd;
+use vmm_sys_util::eventfd::EventFd;
+use crate::vm::kvm_vm::KvmVm;
+use crate::vm::vcpu::Vcpu;
 
 pub struct Vm {
-    kvm: Kvm,
-    vcpus: Vec<KvmVcpu>,
+    kvm_vm: KvmVm,
+    vcpus: Vec<Vcpu>,
     memory: MemoryManager,
     io_dispatch: Arc<IoDispatcher>,
     termios: Option<Termios>,
 }
 
 impl Vm {
-    fn create<A: ArchSetup>(arch: &mut A) -> Result<Self> {
-        let kvm = arch.open_kvm()
+    fn create<A: ArchSetup>(arch: &mut A, reset_evt: EventFd) -> Result<Self> {
+        let kvm_vm = KvmVm::open()?;
+        kvm_vm.create_irqchip()?;
+        kvm_vm.vm_fd().set_tss_address(0xfffbd000)
+            .map_err(Error::KvmError)?;
+
+        let memory = arch.create_memory(kvm_vm.clone())
             .map_err(Error::ArchError)?;
-        let memory = arch.create_memory(&kvm)
-            .map_err(Error::ArchError)?;
+
         Ok(Vm {
-            kvm,
+            kvm_vm,
             memory,
             vcpus: Vec::new(),
-            io_dispatch: IoDispatcher::new(),
+            io_dispatch: IoDispatcher::new(reset_evt),
             termios: None,
         })
     }
 
-    pub fn start(&self) -> Result<()> {
-        let shutdown = Arc::new(AtomicBool::new(false));
+    pub fn start(&mut self) -> Result<()> {
         let mut handles = Vec::new();
-        for vcpu in self.vcpus.clone() {
-            let mut run_area = KvmRunArea::new(vcpu, shutdown.clone(), self.io_dispatch.clone())?;
-            let h = thread::spawn(move || run_area.run());
+        for vcpu in self.vcpus.drain(..) {
+            let h = thread::spawn(move || {
+                vcpu.run();
+            });
             handles.push(h);
         }
 
@@ -58,6 +64,11 @@ impl Vm {
         Ok(())
 
     }
+
+    pub fn vm_fd(&self) -> &VmFd {
+        self.kvm_vm.vm_fd()
+    }
+
 }
 
 pub struct VmSetup <T: ArchSetup> {
@@ -77,13 +88,15 @@ impl <T: ArchSetup> VmSetup <T> {
     }
 
     pub fn create_vm(&mut self) -> Result<Vm> {
-        let mut vm = Vm::create(&mut self.arch)?;
+        let exit_evt = EventFd::new(libc::EFD_NONBLOCK)?;
+        let reset_evt = exit_evt.try_clone()?;
+        let mut vm = Vm::create(&mut self.arch, reset_evt)?;
 
         devices::rtc::Rtc::register(vm.io_dispatch.clone());
 
         if self.config.verbose() {
             self.cmdline.push("earlyprintk=serial");
-            devices::serial::SerialDevice::register(vm.kvm.clone(),vm.io_dispatch.clone(), 0);
+            devices::serial::SerialDevice::register(vm.kvm_vm.clone(),vm.io_dispatch.clone(), 0);
         } else {
             self.cmdline.push("quiet");
         }
@@ -102,7 +115,7 @@ impl <T: ArchSetup> VmSetup <T> {
             .map_err(Error::TerminalTermios)?;
         vm.termios = Some(saved);
 
-        let mut virtio = VirtioBus::new(vm.memory.clone(), vm.io_dispatch.clone(), vm.kvm.clone());
+        let mut virtio = VirtioBus::new(vm.memory.clone(), vm.io_dispatch.clone(), vm.kvm_vm.clone());
         self.setup_synthetic_bootfs(&mut virtio)?;
         self.setup_virtio(&mut virtio)
             .map_err(Error::SetupVirtio)?;
@@ -114,9 +127,9 @@ impl <T: ArchSetup> VmSetup <T> {
         self.arch.setup_memory(&self.cmdline, &virtio.pci_irqs())
             .map_err(Error::ArchError)?;
 
+        let shutdown = Arc::new(AtomicBool::new(false));
         for id in 0..self.config.ncpus() {
-            let vcpu = vm.kvm.new_vcpu(id).map_err(Error::CreateVmFailed)?;
-            self.arch.setup_vcpu(&vcpu).map_err(Error::ArchError)?;
+            let vcpu = vm.kvm_vm.create_vcpu(id as u64, vm.io_dispatch.clone(), shutdown.clone(), &mut self.arch)?;
             vm.vcpus.push(vcpu);
         }
         Ok(vm)

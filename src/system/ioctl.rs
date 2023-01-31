@@ -5,7 +5,6 @@ use crate::system::errno::{Result,Error};
 pub const IOC_SIZEBITS:  u64 = 14;
 pub const IOC_DIRBITS:   u64 = 2;
 
-pub const IOC_NONE:      u64 = 0;
 pub const IOC_READ:      u64 = 2;
 pub const IOC_WRITE:     u64 = 1;
 pub const IOC_RDWR:      u64 = IOC_READ | IOC_WRITE;
@@ -29,16 +28,8 @@ macro_rules! ioc {
         (($sz as u64 & $crate::system::ioctl::IOC_SIZEMASK) << $crate::system::ioctl::IOC_SIZESHIFT)) as ::libc::c_ulong)
 }
 
-macro_rules! io {
-    ($ty:expr, $nr:expr) => (ioc!($crate::system::ioctl::IOC_NONE, $ty, $nr, 0))
-}
-
 macro_rules! iow {
     ($ty:expr, $nr:expr, $sz:expr) => (ioc!($crate::system::ioctl::IOC_WRITE, $ty, $nr, $sz))
-}
-
-macro_rules! ior {
-    ($ty:expr, $nr:expr, $sz:expr) => (ioc!($crate::system::ioctl::IOC_READ, $ty, $nr, $sz))
 }
 
 macro_rules! iorw {

@@ -2,7 +2,7 @@ use std::sync::{Arc, RwLock};
 use std::io::{self, Write};
 
 use crate::vm::io::{IoPortOps,IoDispatcher};
-use crate::kvm::Kvm;
+use crate::vm::KvmVm;
 
 const UART_TX: u16 = 0;
 const UART_RX: u16 = 0;
@@ -67,7 +67,7 @@ impl Bits for u8 {
 
 pub struct SerialDevice {
     iobase: u16,
-    kvm: Kvm,
+    kvm_vm: KvmVm,
     irq: u8,
     irq_state: u8,
     txcnt: usize,
@@ -134,12 +134,12 @@ impl SerialDevice {
         if iir == 0 {
             self.iir = UART_IIR_NO_INT;
             if self.irq_state != 0 {
-                self.kvm.irq_line(self.irq as u32, 0).unwrap();
+                self.kvm_vm.set_irq_line(self.irq as u32, false).unwrap();
             }
         } else {
             self.iir = iir;
             if self.irq_state == 0 {
-                self.kvm.irq_line(self.irq as u32, 1).unwrap();
+                self.kvm_vm.set_irq_line(self.irq as u32, true).unwrap();
             }
         }
         self.irq_state = iir;
@@ -270,9 +270,9 @@ impl SerialDevice {
         }
     }
 
-    pub fn register(kvm: Kvm, io: Arc<IoDispatcher>, id: u8) {
+    pub fn register(kvm_vm: KvmVm, io: Arc<IoDispatcher>, id: u8) {
         if let Some((base,irq)) = SerialDevice::base_irq_for_id(id) {
-            let dev = SerialDevice::new(kvm, base, irq);
+            let dev = SerialDevice::new(kvm_vm, base, irq);
             io.register_ioports(base, 8, Arc::new(RwLock::new(dev)));
         }
     }
@@ -287,10 +287,10 @@ impl SerialDevice {
         }
     }
 
-    fn new(kvm: Kvm, iobase: u16, irq: u8) -> SerialDevice {
+    fn new(kvm_vm: KvmVm, iobase: u16, irq: u8) -> SerialDevice {
         SerialDevice {
             iobase,
-            kvm,
+            kvm_vm,
             irq,
             irq_state: 0,
             txcnt: 0,

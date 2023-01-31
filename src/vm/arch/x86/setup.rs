@@ -1,15 +1,16 @@
+use kvm_bindings::CpuId;
+use kvm_ioctls::VcpuFd;
 use crate::memory::{MemoryManager, GuestRam, SystemAllocator, AddressRange};
 use crate::vm::VmConfig;
 use crate::vm::arch::{ArchSetup, Error, Result};
 use crate::vm::kernel_cmdline::KernelCmdLine;
 use crate::virtio::PciIrq;
-use crate::kvm::{Kvm, KvmVcpu};
-use crate::vm::arch::x86::kvm::x86_open_kvm;
 use crate::vm::arch::x86::memory::{x86_setup_memory_regions, x86_setup_memory};
 use crate::vm::arch::x86::cpuid::setup_cpuid;
 use crate::vm::arch::x86::registers::{setup_pm_sregs, setup_pm_regs, setup_fpu, setup_msrs};
 use crate::vm::arch::x86::interrupts::setup_lapic;
 use crate::vm::arch::x86::kernel::KVM_KERNEL_LOAD_ADDRESS;
+use crate::vm::kvm_vm::KvmVm;
 
 pub struct X86ArchSetup {
     ram_size: usize,
@@ -40,16 +41,12 @@ fn get_base_dev_pfn(mem_size: u64) -> u64 {
 }
 
 impl ArchSetup for X86ArchSetup {
-    fn open_kvm(&self) -> Result<Kvm> {
-        x86_open_kvm()
-    }
-
-    fn create_memory(&mut self, kvm: &Kvm) -> Result<MemoryManager> {
+    fn create_memory(&mut self, kvm_vm: KvmVm) -> Result<MemoryManager> {
         let ram = GuestRam::new(self.ram_size);
         let dev_addr_start = get_base_dev_pfn(self.ram_size as u64) * 4096;
         let dev_addr_size = u64::max_value() - dev_addr_start;
         let allocator = SystemAllocator::new(AddressRange::new(dev_addr_start,dev_addr_size as usize));
-        let mut mm = MemoryManager::new(kvm.clone(), ram, allocator, self.use_drm)
+        let mut mm = MemoryManager::new(kvm_vm, ram, allocator, self.use_drm)
             .map_err(Error::MemoryManagerCreate)?;
         x86_setup_memory_regions(&mut mm, self.ram_size)?;
         self.memory = Some(mm.clone());
@@ -62,12 +59,15 @@ impl ArchSetup for X86ArchSetup {
         Ok(())
     }
 
-    fn setup_vcpu(&self, vcpu: &KvmVcpu) -> Result<()> {
-        setup_cpuid(vcpu)?;
-        setup_pm_sregs(vcpu)?;
-        setup_pm_regs(&vcpu, KVM_KERNEL_LOAD_ADDRESS)?;
-        setup_fpu(vcpu)?;
-        setup_msrs(vcpu)?;
-        setup_lapic(vcpu.raw_fd())
+    fn setup_vcpu(&self, vcpu_fd: &VcpuFd, cpuid: CpuId) -> Result<()> {
+        setup_cpuid(vcpu_fd, cpuid)?;
+        setup_pm_sregs(vcpu_fd)?;
+        setup_pm_regs(&vcpu_fd, KVM_KERNEL_LOAD_ADDRESS)?;
+        setup_fpu(vcpu_fd)?;
+        setup_msrs(vcpu_fd)?;
+        setup_lapic(vcpu_fd)?;
+        Ok(())
     }
 }
+
+

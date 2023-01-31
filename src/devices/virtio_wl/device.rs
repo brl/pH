@@ -3,13 +3,14 @@ use std::sync::{RwLock, Arc};
 use std::thread;
 
 use crate::{system, virtio};
-use crate::system::{EPoll,EventFd};
+use crate::system::EPoll;
 use crate::memory::{MemoryManager, DrmDescriptor};
 use crate::virtio::{VirtQueue, VirtioBus, VirtioDeviceOps, Chain};
 
 use crate::devices::virtio_wl::{vfd::VfdManager, consts::*, Error, Result, VfdObject};
 use crate::system::ioctl::ioctl_with_ref;
 use std::os::raw::{c_ulong, c_uint, c_ulonglong};
+use vmm_sys_util::eventfd::EventFd;
 
 #[repr(C)]
 struct dma_buf_sync {
@@ -41,7 +42,7 @@ impl VirtioWayland {
     }
 
     fn create_device(memory: MemoryManager, in_vq: VirtQueue, out_vq: VirtQueue, transition: bool, enable_dmabuf: bool) -> Result<WaylandDevice> {
-        let kill_evt = EventFd::new().map_err(Error::EventFdCreate)?;
+        let kill_evt = EventFd::new(0).map_err(Error::EventFdCreate)?;
         let dev = WaylandDevice::new(memory, in_vq, out_vq, kill_evt, transition, enable_dmabuf)?;
         Ok(dev)
     }

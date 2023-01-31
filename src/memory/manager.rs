@@ -3,16 +3,16 @@ use std::os::unix::io::{AsRawFd,RawFd};
 use std::sync::{Arc, RwLock};
 
 use crate::memory::{GuestRam, SystemAllocator, Mapping, Error, Result};
-use crate::kvm::Kvm;
 use crate::system::FileDesc;
 use crate::util::BitSet;
 use crate::memory::drm::{DrmBufferAllocator, DrmDescriptor};
 use std::io::SeekFrom;
 use crate::memory::ram::MemoryRegion;
+use crate::vm::KvmVm;
 
 #[derive(Clone)]
 pub struct MemoryManager {
-    kvm: Kvm,
+    kvm_vm: KvmVm,
     ram: GuestRam,
     device_memory: Arc<RwLock<DeviceMemory>>,
     drm_allocator: Option<DrmBufferAllocator>,
@@ -20,7 +20,7 @@ pub struct MemoryManager {
 
 impl MemoryManager {
 
-    pub fn new(kvm: Kvm, ram: GuestRam, allocator: SystemAllocator, use_drm: bool) -> Result<Self> {
+    pub fn new(kvm_vm: KvmVm, ram: GuestRam, allocator: SystemAllocator, use_drm: bool) -> Result<Self> {
         let device_memory = RwLock::new(DeviceMemory::new(ram.region_count(), allocator)).into();
         let drm_allocator = if use_drm {
             DrmBufferAllocator::open().ok()
@@ -28,7 +28,7 @@ impl MemoryManager {
             None
         };
         Ok(MemoryManager {
-            kvm, ram, device_memory,
+            kvm_vm, ram, device_memory,
             drm_allocator,
         })
     }
@@ -37,8 +37,8 @@ impl MemoryManager {
         &self.ram
     }
 
-    pub fn kvm(&self) -> &Kvm {
-        &self.kvm
+    pub fn kvm_vm(&self) -> &KvmVm {
+        &self.kvm_vm
     }
 
     pub fn set_ram_regions(&mut self, regions: Vec<MemoryRegion>) {
@@ -49,12 +49,12 @@ impl MemoryManager {
 
     pub fn register_device_memory(&self, fd: RawFd, size: usize) -> Result<(u64, u32)> {
         let mut devmem = self.device_memory.write().unwrap();
-        devmem.register(self.kvm(), fd, size)
+        devmem.register(self.kvm_vm(), fd, size)
     }
 
     pub fn unregister_device_memory(&self, slot: u32) -> Result<()> {
         let mut devmem = self.device_memory.write().unwrap();
-        devmem.unregister(self.kvm(), slot)
+        devmem.unregister(self.kvm_vm(), slot)
     }
 
     pub fn drm_available(&self) -> bool {
@@ -108,13 +108,13 @@ impl DeviceMemory {
         }
     }
 
-    fn register(&mut self, kvm: &Kvm, fd: RawFd, size: usize) -> Result<(u64, u32)> {
+    fn register(&mut self, kvm_vm: &KvmVm, fd: RawFd, size: usize) -> Result<(u64, u32)> {
         let mapping = Mapping::new_from_fd(fd, size)
             .map_err(Error::MappingFailed)?;
 
         let (addr, slot) = self.allocate_addr_and_slot(size)?;
 
-        if let Err(e) = kvm.add_memory_region(slot, addr, mapping.address(), size) {
+        if let Err(e) = kvm_vm.add_memory_region(slot, addr, mapping.address(), size) {
             self.free_addr_and_slot(addr, slot);
             Err(Error::RegisterMemoryFailed(e))
         } else {
@@ -123,9 +123,9 @@ impl DeviceMemory {
         }
     }
 
-    fn unregister(&mut self, kvm: &Kvm, slot: u32) -> Result<()> {
+    fn unregister(&mut self, kvm_vm: &KvmVm, slot: u32) -> Result<()> {
         if let Some(registration) = self.mappings.remove(&slot) {
-            kvm.remove_memory_region(slot)
+            kvm_vm.remove_memory_region(slot)
                 .map_err(Error::UnregisterMemoryFailed)?;
             self.free_addr_and_slot(registration.guest_addr, slot);
         }

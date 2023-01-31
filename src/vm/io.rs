@@ -1,4 +1,5 @@
 use std::sync::{Arc,RwLock,RwLockWriteGuard};
+use vmm_sys_util::eventfd::EventFd;
 use crate::memory::AddressRange;
 
 pub trait IoPortOps: Send+Sync {
@@ -32,7 +33,7 @@ impl IoPortOps for IoPortPS2Control {
     fn io_in(&mut self, _port: u16, _size: usize) -> u32 { 0x02 }
 }
 
-struct IoPortFakeI8042(bool);
+struct IoPortFakeI8042(bool, EventFd);
 
 impl IoPortOps for IoPortFakeI8042 {
     fn io_in(&mut self, port: u16, _size: usize) -> u32 {
@@ -47,6 +48,9 @@ impl IoPortOps for IoPortFakeI8042 {
     fn io_out(&mut self, port: u16, _size: usize, val: u32) {
         if port == 0x64 && val == 0xfe && !self.0 {
             self.0 = true;
+            if let Err(err) = self.1.write(1) {
+                warn!("Error triggering reset event: {}", err);
+            }
             println!("Reset signal!");
         }
     }
@@ -107,9 +111,9 @@ pub struct IoDispatcher {
 }
 
 impl IoDispatcher {
-    pub fn new() -> Arc<IoDispatcher> {
+    pub fn new(reset_evt: EventFd) -> Arc<IoDispatcher> {
         Arc::new(IoDispatcher{
-            state: RwLock::new(IoDispatcherState::new()),
+            state: RwLock::new(IoDispatcherState::new(reset_evt)),
         })
     }
 
@@ -149,13 +153,13 @@ struct IoDispatcherState {
 }
 
 impl IoDispatcherState {
-    pub fn new() -> IoDispatcherState {
+    pub fn new(reset_evt: EventFd) -> IoDispatcherState {
         let mut st = IoDispatcherState {
             last_unhandled_port: 0,
             ioport_entries: Vec::new(),
             mmio_entries: Vec::new(),
         };
-        st.setup_ioports();
+        st.setup_ioports(reset_evt);
         st
     }
 
@@ -227,13 +231,13 @@ impl IoDispatcherState {
         self.register_ioports(port, count, Arc::new(RwLock::new(IoPortDummy)));
     }
 
-    fn setup_ioports(&mut self) {
+    fn setup_ioports(&mut self, reset_evt: EventFd) {
         /* 0000 - 001F - DMA1 controller */
         self.register_dummy(0x0000, 32);
         /* 0020 - 003F - 8259A PIC 1 */
         self.register_dummy(0x0020, 2);
         /* 0060 - 0068 - i8042 */
-        self.register_ioports(0x0060, 8, Arc::new(RwLock::new(IoPortFakeI8042(false))));
+        self.register_ioports(0x0060, 8, Arc::new(RwLock::new(IoPortFakeI8042(false, reset_evt))));
         /* 0040 - 005F - PIT (8253,8254) */
         self.register_dummy(0x0040, 4);
         /* 0092 - PS/2 system control port A */

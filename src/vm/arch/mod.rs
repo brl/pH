@@ -1,4 +1,5 @@
-use crate::kvm::{KvmVcpu, Kvm};
+use kvm_bindings::CpuId;
+use kvm_ioctls::VcpuFd;
 pub use crate::vm::arch::x86::X86ArchSetup;
 use crate::memory::MemoryManager;
 
@@ -7,21 +8,20 @@ mod x86;
 
 pub use x86::PCI_MMIO_RESERVED_BASE;
 
-pub use x86::KvmRegs;
 pub use error::{Error,Result};
 use crate::vm::kernel_cmdline::KernelCmdLine;
 use crate::vm::VmConfig;
 use crate::virtio::PciIrq;
+use crate::vm::kvm_vm::KvmVm;
 
 pub fn create_setup(config: &VmConfig) -> X86ArchSetup {
     X86ArchSetup::create(config)
 }
 
 pub trait ArchSetup {
-    fn open_kvm(&self) -> Result<Kvm>;
-    fn create_memory(&mut self, kvm: &Kvm) -> Result<MemoryManager>;
+    fn create_memory(&mut self, kvm_vm: KvmVm) -> Result<MemoryManager>;
     fn setup_memory(&mut self, cmdline: &KernelCmdLine, pci_irqs: &[PciIrq]) -> Result<()>;
-    fn setup_vcpu(&self, vcpu: &KvmVcpu) -> Result<()>;
+    fn setup_vcpu(&self, vcpu: &VcpuFd, cpuid: CpuId) -> Result<()>;
 }
 
 

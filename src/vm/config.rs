@@ -124,7 +124,7 @@ impl VmConfig {
             }
         }
         let mut setup = self.setup();
-        let vm = match setup.create_vm() {
+        let mut vm = match setup.create_vm() {
             Ok(vm) => vm,
             Err(err) => {
                 warn!("Failed to create VM: {}", err);
