@@ -6,8 +6,8 @@ use libc;
 use byteorder::{LittleEndian,ReadBytesExt,WriteBytesExt};
 
 use crate::devices::virtio_9p::file::Qid;
+use crate::io::Chain;
 use crate::memory::GuestRam;
-use crate::virtio::Chain;
 
 const P9_HEADER_LEN: usize = 7;
 const P9_RLERROR: u8 = 7;

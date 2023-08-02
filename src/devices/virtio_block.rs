@@ -1,13 +1,12 @@
 use std::io::Write;
-use std::sync::{RwLock, Arc};
 use std::{result, io, thread};
 
-use crate::{disk, virtio};
-use crate::virtio::{VirtioBus, VirtioDeviceOps, VirtQueue, DeviceConfigArea, Chain};
-use crate::memory::MemoryManager;
+use crate::disk;
 use crate::disk::DiskImage;
 
 use thiserror::Error;
+use crate::io::{Chain, FeatureBits, Queues, VirtioDevice, VirtioDeviceType, VirtioError, VirtQueue};
+use crate::io::virtio::DeviceConfigArea;
 
 const VIRTIO_BLK_F_RO: u64 = 1 << 5;
 const VIRTIO_BLK_F_BLK_SIZE: u64 = 1 << 6;
@@ -39,7 +38,7 @@ enum Error {
     #[error("error flushing disk image: {0}")]
     DiskFlush(disk::Error),
     #[error("error waiting on virtqueue: {0}")]
-    VirtQueueWait(virtio::Error),
+    VirtQueueWait(VirtioError),
     #[error("virtqueue read descriptor size ({0}) is invalid. Not a multiple of sector size")]
     InvalidReadDescriptor(usize),
 }
@@ -49,66 +48,66 @@ type Result<T> = result::Result<T, Error>;
 pub struct VirtioBlock<D: DiskImage+'static> {
     disk_image: Option<D>,
     config: DeviceConfigArea,
-    enabled_features: u64,
+    features: FeatureBits,
 }
 
 const HEADER_SIZE: usize = 16;
 
-const VIRTIO_ID_BLOCK: u16 = 2;
 const CAPACITY_OFFSET: usize = 0;
 const SEG_MAX_OFFSET: usize = 12;
 const BLK_SIZE_OFFSET: usize = 20;
 const CONFIG_SIZE: usize = 24;
 impl <D: DiskImage + 'static> VirtioBlock<D> {
 
-    fn new(disk_image: D) -> Self {
+    pub fn new(disk_image: D) -> Self {
         let mut config = DeviceConfigArea::new(CONFIG_SIZE);
         config.write_u64(CAPACITY_OFFSET, disk_image.sector_count());
         config.write_u32(SEG_MAX_OFFSET, QUEUE_SIZE as u32 - 2);
         config.write_u32(BLK_SIZE_OFFSET, 1024);
+        let features = FeatureBits::new_default( VIRTIO_BLK_F_FLUSH |
+                VIRTIO_BLK_F_BLK_SIZE |
+                VIRTIO_BLK_F_SEG_MAX  |
+                if disk_image.read_only() {
+                    VIRTIO_BLK_F_RO
+                } else {
+                    0
+                }
+        );
         VirtioBlock {
             disk_image: Some(disk_image),
             config,
-            enabled_features: 0,
+            features,
         }
-    }
-
-    pub fn create(vbus: &mut VirtioBus, disk_image: D) -> virtio::Result<()> {
-        let feature_bits = VIRTIO_BLK_F_FLUSH |
-            VIRTIO_BLK_F_BLK_SIZE |
-            VIRTIO_BLK_F_SEG_MAX  |
-            if disk_image.read_only() {
-                VIRTIO_BLK_F_RO
-            } else {
-                0
-            };
-
-        let dev = Arc::new(RwLock::new(VirtioBlock::new(disk_image)));
-
-        vbus.new_virtio_device(VIRTIO_ID_BLOCK, dev)
-            .set_queue_sizes(&[QUEUE_SIZE])
-            .set_config_size(CONFIG_SIZE)
-            .set_features(feature_bits)
-            .register()
     }
 }
 
-impl <D: DiskImage> VirtioDeviceOps for VirtioBlock<D> {
-    fn enable_features(&mut self, bits: u64) -> bool {
-        self.enabled_features = bits;
-        true
+impl <D: DiskImage> VirtioDevice for VirtioBlock<D> {
+    fn features(&self) -> &FeatureBits {
+        &self.features
     }
 
-    fn write_config(&mut self, offset: usize, size: usize, val: u64) {
-        self.config.write_config(offset, size, val);
+    fn queue_sizes(&self) -> &[u16] {
+        &[QUEUE_SIZE as u16]
     }
 
-    fn read_config(&mut self, offset: usize, size: usize) -> u64 {
-        self.config.read_config(offset, size)
+    fn device_type(&self) -> VirtioDeviceType {
+        VirtioDeviceType::Block
     }
 
-    fn start(&mut self, _: &MemoryManager, mut queues: Vec<VirtQueue>) {
-        let vq = queues.pop().unwrap();
+    fn config_size(&self) -> usize {
+        CONFIG_SIZE
+    }
+
+    fn read_config(&self, offset: u64, data: &mut [u8]) {
+        self.config.read_config(offset, data);
+    }
+
+    fn write_config(&mut self, offset: u64, data: &[u8]) {
+        self.config.write_config(offset, data);
+    }
+
+    fn start(&mut self, queues: &Queues) {
+        let vq = queues.get_queue(0);
 
         let mut disk = self.disk_image.take().expect("No disk image?");
         if let Err(err) = disk.open() {

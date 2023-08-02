@@ -1,10 +1,8 @@
-use std::sync::{Arc,RwLock};
 use std::thread;
 
 use std::path::{PathBuf, Path};
 
-use crate::memory::{GuestRam, MemoryManager};
-use crate::virtio::{self,VirtioBus,VirtioDeviceOps, VirtQueue, Result};
+use crate::memory::GuestRam;
 use crate::devices::virtio_9p::server::Server;
 use crate::devices::virtio_9p::filesystem::{FileSystem, FileSystemOps};
 use self::pdu::PduParser;
@@ -16,16 +14,15 @@ mod filesystem;
 mod server;
 mod synthetic;
 
-
-const VIRTIO_ID_9P: u16 = 9;
 const VIRTIO_9P_MOUNT_TAG: u64 = 0x1;
 
 pub use synthetic::SyntheticFS;
+use crate::io::{FeatureBits, Queues, VirtioDevice, VirtioDeviceType, VirtQueue};
 
 pub struct VirtioP9<T: FileSystemOps> {
     filesystem: T,
     root_dir: PathBuf,
-    feature_bits: u64,
+    features: FeatureBits,
     debug: bool,
     config: Vec<u8>,
 }
@@ -41,52 +38,54 @@ impl <T: FileSystemOps+'static> VirtioP9<T> {
         config
     }
 
-    fn new(filesystem: T, tag_name: &str, root_dir: &str, debug: bool) -> Arc<RwLock<Self>> {
-        Arc::new(RwLock::new(VirtioP9 {
+    pub fn new(filesystem: T, tag_name: &str, root_dir: &str, debug: bool) -> Self {
+        VirtioP9 {
             filesystem,
             root_dir: PathBuf::from(root_dir),
-            feature_bits: 0,
+            features: FeatureBits::new_default(VIRTIO_9P_MOUNT_TAG),
             debug,
             config: VirtioP9::<T>::create_config(tag_name),
-        }))
+        }
     }
 
-    pub fn create_with_filesystem(filesystem: T, vbus: &mut VirtioBus, tag_name: &str, root_dir: &str, debug: bool) -> Result<()> {
-        vbus.new_virtio_device(VIRTIO_ID_9P, VirtioP9::new(filesystem, tag_name, root_dir, debug))
-            .set_num_queues(1)
-            .set_features(VIRTIO_9P_MOUNT_TAG)
-            .set_config_size(tag_name.len() + 3)
-            .register()
-    }
 }
 
 impl VirtioP9<FileSystem> {
-
-    pub fn create(vbus: &mut VirtioBus, tag_name: &str, root_dir: &str, read_only: bool, debug: bool) -> Result<()> {
+    pub fn new_filesystem(tag_name: &str, root_dir: &str, read_only: bool, debug: bool) -> Self {
         let filesystem = FileSystem::new(PathBuf::from(root_dir), read_only);
-        Self::create_with_filesystem(filesystem, vbus, tag_name, root_dir, debug)
+        Self::new(filesystem, tag_name, root_dir, debug)
     }
 }
 
-impl <T: FileSystemOps+'static> VirtioDeviceOps for VirtioP9<T> {
-    fn reset(&mut self) {
-        println!("Reset called");
+impl <T: FileSystemOps+'static> VirtioDevice for VirtioP9<T> {
+    fn features(&self) -> &FeatureBits {
+        &self.features
     }
 
-    fn enable_features(&mut self, bits: u64) -> bool {
-        self.feature_bits = bits;
-        true
+    fn queue_sizes(&self) -> &[u16] {
+        &[VirtQueue::DEFAULT_QUEUE_SIZE]
     }
 
-    fn read_config(&mut self, offset: usize, size: usize) -> u64 {
-        virtio::read_config_buffer(&self.config, offset, size)
+    fn device_type(&self) -> VirtioDeviceType {
+        VirtioDeviceType::NineP
     }
 
-    fn start(&mut self, memory: &MemoryManager, mut queues: Vec<VirtQueue>) {
-        let vq = queues.pop().unwrap();
+    fn config_size(&self) -> usize {
+        self.config.len()
+    }
+
+    fn read_config(&self, offset: u64, data: &mut [u8]) {
+        let offset = offset as usize;
+        if offset + data.len() <= self.config.len() {
+            data.copy_from_slice(&self.config[offset..offset+data.len()])
+        }
+    }
+
+    fn start(&mut self, queues: &Queues) {
+        let vq = queues.get_queue(0);
         let root_dir = self.root_dir.clone();
         let filesystem = self.filesystem.clone();
-        let ram = memory.guest_ram().clone();
+        let ram = queues.memory().guest_ram().clone();
         let debug = self.debug;
         thread::spawn(move || run_device(ram, vq, &root_dir, filesystem, debug));
     }

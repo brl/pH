@@ -8,4 +8,4 @@ mod kernel;
 mod setup;
 
 pub use setup::X86ArchSetup;
-pub use memory::PCI_MMIO_RESERVED_BASE;
+pub use memory::{PCI_MMIO_RESERVED_BASE,PCI_MMIO_RESERVED_SIZE,IRQ_BASE,IRQ_MAX};

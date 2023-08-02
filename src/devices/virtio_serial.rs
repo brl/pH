@@ -1,12 +1,8 @@
-use std::sync::{Arc,RwLock};
 use std::io::{self,Write,Read};
 use std::thread::spawn;
 use termios::*;
 
-use crate::virtio::{VirtioDeviceOps,VirtioBus, VirtQueue,Result};
-use crate::memory::MemoryManager;
-
-const VIRTIO_ID_CONSOLE: u16 = 3;
+use crate::io::{VirtioDevice, VirtioDeviceType, FeatureBits, VirtQueue, ReadableInt, Queues};
 
 const VIRTIO_CONSOLE_F_SIZE: u64 = 0x1;
 const VIRTIO_CONSOLE_F_MULTIPORT: u64 = 0x2;
@@ -21,25 +17,18 @@ const VIRTIO_CONSOLE_PORT_OPEN: u16     = 6;
 const _VIRTIO_CONSOLE_PORT_NAME: u16     = 7;
 
 pub struct VirtioSerial {
-    feature_bits: u64,
+    features: FeatureBits,
 }
 
 impl VirtioSerial {
-    fn new() -> VirtioSerial {
-        VirtioSerial{feature_bits:0}
+    pub fn new() -> VirtioSerial {
+        let features = FeatureBits::new_default(VIRTIO_CONSOLE_F_MULTIPORT|VIRTIO_CONSOLE_F_SIZE);
+        VirtioSerial{
+            features,
+        }
     }
 
-    pub fn create(vbus: &mut VirtioBus) -> Result<()> {
-        let dev = Arc::new(RwLock::new(VirtioSerial::new()));
-        vbus.new_virtio_device(VIRTIO_ID_CONSOLE, dev)
-            .set_num_queues(4)
-            .set_device_class(0x0700)
-            .set_config_size(12)
-            .set_features(VIRTIO_CONSOLE_F_MULTIPORT|VIRTIO_CONSOLE_F_SIZE)
-            .register()
-    }
-
-    fn start_console(&self, _memory: &MemoryManager, q: VirtQueue) {
+    fn start_console(&self, q: VirtQueue) {
         spawn(move || {
             loop {
                 q.wait_ready().unwrap();
@@ -52,7 +41,7 @@ impl VirtioSerial {
     }
 
     fn multiport(&self) -> bool {
-        self.feature_bits & VIRTIO_CONSOLE_F_MULTIPORT != 0
+        self.features.has_guest_bit(VIRTIO_CONSOLE_F_MULTIPORT)
     }
 }
 
@@ -69,39 +58,50 @@ struct WinSz {
 
 const TIOCGWINSZ: u64 = 0x5413;
 
-impl VirtioDeviceOps for VirtioSerial {
-    fn reset(&mut self) {
-        println!("Reset called");
+impl VirtioDevice for VirtioSerial {
+    fn features(&self) -> &FeatureBits {
+        &self.features
     }
 
-    fn enable_features(&mut self, bits: u64) -> bool {
-        self.feature_bits = bits;
-        true
+
+    fn queue_sizes(&self) -> &[u16] {
+        &[
+            VirtQueue::DEFAULT_QUEUE_SIZE,
+            VirtQueue::DEFAULT_QUEUE_SIZE,
+            VirtQueue::DEFAULT_QUEUE_SIZE,
+            VirtQueue::DEFAULT_QUEUE_SIZE,
+        ]
     }
 
-    fn read_config(&mut self, offset: usize, _size: usize) -> u64 {
-        if offset == 4 {
-            return 1;
+    fn device_type(&self) -> VirtioDeviceType {
+        VirtioDeviceType::Console
+    }
+
+    fn config_size(&self) -> usize {
+        12
+    }
+
+    fn read_config(&self, offset: u64, data: &mut [u8]) {
+        if offset == 4 && data.len() == 4 {
+            ReadableInt::new_dword(1).read(data);
+        } else {
+            data.fill(0);
         }
-        0
     }
 
-    fn start(&mut self, memory: &MemoryManager, mut queues: Vec<VirtQueue>) {
-        let mut term = Terminal::create(queues.remove(0));
-        self.start_console(memory, queues.remove(0));
-
+    fn start(&mut self, queues: &Queues) {
+        let mut term = Terminal::create(queues.get_queue(0));
+        self.start_console(queues.get_queue(1));
         spawn( move || {
             term.read_loop();
         });
-
         if self.multiport() {
-            let mut control = Control::new(queues.remove(0), queues.remove(0));
+            let mut control = Control::new(queues.get_queue(2), queues.get_queue(3));
             spawn(move || {
                 control.run();
             });
         }
     }
-
 }
 
 struct Control {

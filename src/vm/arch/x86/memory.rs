@@ -1,16 +1,18 @@
 use crate::memory::{MemoryManager, MemoryRegion, GuestRam};
 use crate::vm::arch::{Error, Result};
 use std::cmp;
+use crate::io::PciIrq;
 use crate::vm::kernel_cmdline::KernelCmdLine;
 use crate::vm::arch::x86::kernel::{load_pm_kernel, KERNEL_CMDLINE_ADDRESS};
 use crate::system;
 use crate::vm::arch::x86::mptable::setup_mptable;
-use crate::virtio::PciIrq;
 use crate::vm::KvmVm;
 
 pub const HIMEM_BASE: u64 = 1 << 32;
 pub const PCI_MMIO_RESERVED_SIZE: usize = 512 << 20;
 pub const PCI_MMIO_RESERVED_BASE: u64 = HIMEM_BASE - PCI_MMIO_RESERVED_SIZE as u64;
+pub const IRQ_BASE: u32 = 5;
+pub const IRQ_MAX: u32 = 23;
 
 
 pub fn x86_setup_memory_regions(memory: &mut MemoryManager, ram_size: usize) -> Result<()> {

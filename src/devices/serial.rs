@@ -1,7 +1,6 @@
-use std::sync::{Arc, RwLock};
 use std::io::{self, Write};
+use crate::io::bus::BusDevice;
 
-use crate::vm::io::{IoPortOps,IoDispatcher};
 use crate::vm::KvmVm;
 
 const UART_TX: u16 = 0;
@@ -43,7 +42,29 @@ const UART_SCR: u16 = 7;
 
 const FIFO_LEN: usize = 64;
 
+pub enum SerialPort {
+    COM1,
+    COM2,
+    COM3,
+    COM4,
+}
 
+impl SerialPort {
+    pub fn io_port(&self) -> u16 {
+        match self {
+            SerialPort::COM1 => 0x3f8,
+            SerialPort::COM2 => 0x2f8,
+            SerialPort::COM3 => 0x3e8,
+            SerialPort::COM4 => 0x2e8,
+        }
+    }
+    pub fn irq(&self) -> u8 {
+        match self {
+            SerialPort::COM1|SerialPort::COM3 => 4,
+            SerialPort::COM2|SerialPort::COM4 => 4,
+        }
+    }
+}
 
 trait Bits {
     fn set(&mut self, flag: Self);
@@ -66,7 +87,6 @@ impl Bits for u8 {
 }
 
 pub struct SerialDevice {
-    iobase: u16,
     kvm_vm: KvmVm,
     irq: u8,
     irq_state: u8,
@@ -87,15 +107,17 @@ pub struct SerialDevice {
     scr: u8,
 }
 
-impl IoPortOps for SerialDevice {
-    fn io_in(&mut self, port: u16, _size: usize) -> u32 {
-        let off = port - self.iobase;
-        self.serial_in(off) as u32
+impl BusDevice for SerialDevice {
+    fn read(&mut self, offset: u64, data: &mut [u8]) {
+        if data.len() == 1 {
+            data[0] = self.serial_in(offset as u16);
+        }
     }
 
-    fn io_out(&mut self, port: u16, _size: usize, val: u32) {
-        let off = port - self.iobase;
-        self.serial_out(off, val as u8);
+    fn write(&mut self, offset: u64, data: &[u8]) {
+        if data.len() == 1 {
+            self.serial_out(offset as u16, data[0])
+        }
     }
 }
 
@@ -270,6 +292,7 @@ impl SerialDevice {
         }
     }
 
+    /*
     pub fn register(kvm_vm: KvmVm, io: Arc<IoDispatcher>, id: u8) {
         if let Some((base,irq)) = SerialDevice::base_irq_for_id(id) {
             let dev = SerialDevice::new(kvm_vm, base, irq);
@@ -287,9 +310,11 @@ impl SerialDevice {
         }
     }
 
-    fn new(kvm_vm: KvmVm, iobase: u16, irq: u8) -> SerialDevice {
+     */
+
+    pub fn new(kvm_vm: KvmVm, irq: u8) -> SerialDevice {
         SerialDevice {
-            iobase,
+//            iobase,
             kvm_vm,
             irq,
             irq_state: 0,

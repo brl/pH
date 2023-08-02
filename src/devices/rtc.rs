@@ -1,8 +1,7 @@
-use std::sync::{Arc,RwLock};
 use std::mem;
 use libc;
-
-use crate::vm::io::{IoDispatcher,IoPortOps};
+use crate::io::bus::BusDevice;
+use crate::io::ReadableInt;
 
 const RTC_SECONDS: u8 = 0x00;
 const RTC_MINUTES: u8 = 0x02;
@@ -21,31 +20,30 @@ pub struct Rtc {
     data: [u8; 128]
 }
 
-impl IoPortOps for Rtc {
-    fn io_in(&mut self, port: u16, _size: usize) -> u32 {
-        if port == 0x0071 {
-            self.data_in() as u32
+impl BusDevice for Rtc {
+    fn read(&mut self, offset: u64, data: &mut [u8]) {
+        if offset == 1 && data.len() == 1 {
+            ReadableInt::new_byte(self.data_in())
+                .read(data);
         } else {
-            0
+            data.fill(0);
         }
     }
 
-    fn io_out(&mut self, port: u16, _size: usize, val: u32) {
-        if port == 0x0070 {
-            self.index_out(val as u8);
-        } else if port == 0x0071 {
-            self.data_out(val as u8)
+    fn write(&mut self, offset: u64, data: &[u8]) {
+        if data.len() == 1 {
+            match offset {
+                0 => self.index_out(data[0]),
+                1 => self.data_out(data[0]),
+                _ => {},
+            }
         }
     }
 }
 
 impl Rtc {
-    pub fn register(io: Arc<IoDispatcher>) {
-        let rtc = Arc::new(RwLock::new(Rtc::new()));
-        io.register_ioports(0x0070, 2, rtc);
-    }
 
-    fn new() -> Rtc {
+    pub fn new() -> Rtc {
         Rtc {
             idx:0,
             data: [0; 128]

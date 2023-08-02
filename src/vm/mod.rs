@@ -3,7 +3,6 @@ static PHINIT: &[u8] = include_bytes!("../../ph-init/target/release/ph-init");
 static SOMMELIER: &[u8] = include_bytes!("../../sommelier/build/sommelier");
 
 pub mod arch;
-pub mod io;
 mod setup;
 mod error;
 mod kernel_cmdline;

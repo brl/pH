@@ -1,11 +1,11 @@
-use std::fmt;
-use std::io::{self,Read,Write};
-
+use std::{fmt, io};
+use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
+use crate::io::virtio::vq::descriptor::Descriptor;
+use crate::io::virtio::vq::virtqueue::QueueBackend;
 use crate::memory::GuestRam;
-use crate::virtio::VirtQueue;
-use crate::virtio::vring::Descriptor;
 
-struct DescriptorList {
+pub struct DescriptorList {
     memory: GuestRam,
     descriptors: Vec<Descriptor>,
     offset: usize,
@@ -14,7 +14,7 @@ struct DescriptorList {
 }
 
 impl DescriptorList {
-    fn new(memory: GuestRam) -> Self {
+    pub fn new(memory: GuestRam) -> Self {
         DescriptorList {
             memory,
             descriptors: Vec::new(),
@@ -24,12 +24,12 @@ impl DescriptorList {
         }
     }
 
-    fn add_descriptor(&mut self, d: Descriptor) {
-        self.total_size += d.len as usize;
+    pub fn add_descriptor(&mut self, d: Descriptor) {
+        self.total_size += d.length();
         self.descriptors.push(d)
     }
 
-    fn reverse(&mut self) {
+    pub fn reverse(&mut self) {
         self.descriptors.reverse();
     }
 
@@ -38,7 +38,7 @@ impl DescriptorList {
         self.offset = 0;
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.descriptors.is_empty()
     }
 
@@ -49,7 +49,7 @@ impl DescriptorList {
     fn current_address(&self, size: usize) -> Option<u64> {
         self.current().and_then(|d| {
             if d.remaining(self.offset) >= size {
-                Some(d.addr + self.offset as u64)
+                Some(d.address() + self.offset as u64)
             } else {
                 None
             }
@@ -111,7 +111,7 @@ impl DescriptorList {
     fn current_slice(&self) -> &[u8] {
         if let Some(d) = self.current() {
             let size = d.remaining(self.offset);
-            let addr = d.addr + self.offset as u64;
+            let addr = d.address() + self.offset as u64;
             self.memory.slice(addr, size).unwrap_or(&[])
         } else {
             &[]
@@ -121,7 +121,7 @@ impl DescriptorList {
     fn current_mut_slice(&self) -> &mut [u8] {
         if let Some(d) = self.current() {
             let size = d.remaining(self.offset);
-            let addr = d.addr + self.offset as u64;
+            let addr = d.address() + self.offset as u64;
             self.memory.mut_slice(addr, size).unwrap_or(&mut [])
         } else {
             &mut []
@@ -135,62 +135,29 @@ impl DescriptorList {
 
 impl fmt::Debug for DescriptorList {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "DList[size={}, [", self.total_size)?;
+        write!(f, "[size={}, [", self.total_size)?;
         for d in self.descriptors.iter().rev() {
-            write!(f, "(#{}, 0x{:08x}, [{}]),", d.idx, d.addr, d.len)?;
+            write!(f, "(0x{:08x}, [{}]),", d.address(), d.length())?;
         }
-        write!(f, "]")
+        write!(f, "] ]")
     }
 }
 
 pub struct Chain {
+    backend: Arc<Mutex<dyn QueueBackend>>,
     head: Option<u16>,
-    vq: VirtQueue,
     readable: DescriptorList,
     writeable: DescriptorList,
 }
 
 impl Chain {
-    pub fn new(memory: GuestRam, vq: VirtQueue, head: u16, ttl: u16) -> Self {
-        let (readable,writeable) = Self::load_descriptors(memory, &vq, head, ttl);
+    pub fn new(backend: Arc<Mutex<dyn QueueBackend>>, head: u16, readable: DescriptorList, writeable: DescriptorList) -> Self {
         Chain {
+            backend,
             head: Some(head),
-            vq,
             readable,
             writeable,
         }
-    }
-
-    fn load_descriptors(memory: GuestRam, vq: &VirtQueue, head: u16, ttl: u16) -> (DescriptorList, DescriptorList) {
-        let mut readable = DescriptorList::new(memory.clone());
-        let mut writeable = DescriptorList::new(memory);
-        let mut idx = head;
-        let mut ttl = ttl;
-
-        while let Some(d) = vq.load_descriptor(idx) {
-            if ttl == 0 {
-                warn!("Descriptor chain length exceeded ttl");
-                break;
-            } else {
-                ttl -= 1;
-            }
-
-            if d.is_write() {
-                writeable.add_descriptor(d);
-            } else {
-                if !writeable.is_empty() {
-                    warn!("Guest sent readable virtqueue descriptor after writeable descriptor in violation of specification");
-                }
-                readable.add_descriptor(d);
-            }
-            if !d.has_next() {
-                break;
-            }
-            idx = d.next;
-        }
-        readable.reverse();
-        writeable.reverse();
-        return (readable, writeable);
     }
 
     pub fn w8(&mut self, n: u8) -> io::Result<()> {
@@ -205,6 +172,7 @@ impl Chain {
         self.write_all(&n.to_le_bytes())?;
         Ok(())
     }
+
     pub fn w64(&mut self, n: u64) -> io::Result<()> {
         self.write_all(&n.to_le_bytes())?;
         Ok(())
@@ -231,7 +199,8 @@ impl Chain {
         if let Some(head) = self.head.take() {
             self.readable.clear();
             self.writeable.clear();
-            self.vq.put_used(head, self.writeable.consumed_size as u32);
+            let backend = self.backend.lock().unwrap();
+            backend.put_used(head, self.writeable.consumed_size as u32);
         }
     }
 
@@ -275,7 +244,7 @@ impl Chain {
     }
 
     pub fn copy_from_reader<R>(&mut self, r: R, size: usize) -> io::Result<usize>
-    where R: Read+Sized
+        where R: Read+Sized
     {
         self.writeable.write_from_reader(r, size)
     }

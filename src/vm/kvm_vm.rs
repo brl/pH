@@ -4,9 +4,9 @@ use std::sync::atomic::AtomicBool;
 use kvm_bindings::{CpuId, KVM_MAX_CPUID_ENTRIES, kvm_pit_config, KVM_PIT_SPEAKER_DUMMY, kvm_userspace_memory_region};
 use kvm_ioctls::{Cap, Kvm, VmFd};
 use kvm_ioctls::Cap::*;
+use crate::io::manager::IoManager;
 use crate::vm::vcpu::Vcpu;
 use crate::vm::{Result, Error, ArchSetup};
-use crate::vm::io::IoDispatcher;
 
 const KVM_API_VERSION: i32 = 12;
 type KvmResult<T> = result::Result<T, kvm_ioctls::Error>;
@@ -17,6 +17,7 @@ static REQUIRED_EXTENSIONS: &[Cap] = &[
     ExtCpuid,
     Hlt,
     Ioeventfd,
+    IoeventfdNoLength,
     Irqchip,
     MpState,
     Pit2,
@@ -115,10 +116,10 @@ impl KvmVm {
             .map_err(Error::VmSetup)
     }
 
-    pub fn create_vcpu<A: ArchSetup>(&self, id: u64, io: Arc<IoDispatcher>, shutdown: Arc<AtomicBool>, arch: &mut A) -> Result<Vcpu> {
+    pub fn create_vcpu<A: ArchSetup>(&self, id: u64, io_manager: IoManager, shutdown: Arc<AtomicBool>, arch: &mut A) -> Result<Vcpu> {
         let vcpu_fd = self.vm_fd.create_vcpu(id)
             .map_err(Error::CreateVcpu)?;
-        let vcpu = Vcpu::new(vcpu_fd, io, shutdown);
+        let vcpu = Vcpu::new(vcpu_fd, io_manager, shutdown);
         arch.setup_vcpu(vcpu.vcpu_fd(), self.supported_cpuid().clone()).map_err(Error::ArchError)?;
         Ok(vcpu)
     }

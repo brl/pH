@@ -4,5 +4,5 @@ mod buffer;
 mod log;
 
 pub use bitvec::BitSet;
-pub use buffer::ByteBuffer;
+pub use buffer::{ByteBuffer,Writeable};
 pub use log::{Logger,LogLevel};

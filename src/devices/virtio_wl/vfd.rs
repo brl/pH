@@ -6,11 +6,11 @@ use std::time::Duration;
 
 use crate::memory::{MemoryManager, DrmDescriptor};
 use crate::system::{FileDesc, FileFlags,EPoll,MemoryFd};
-use crate::virtio::{VirtQueue, Chain};
 
 use crate::devices::virtio_wl::{
     consts::*, Error, Result, shm::VfdSharedMemory, pipe::VfdPipe, socket::VfdSocket, VfdObject
 };
+use crate::io::{Chain, VirtQueue};
 
 pub struct VfdManager {
     wayland_path: PathBuf,

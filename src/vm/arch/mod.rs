@@ -6,12 +6,13 @@ use crate::memory::MemoryManager;
 mod error;
 mod x86;
 
-pub use x86::PCI_MMIO_RESERVED_BASE;
+pub use x86::{PCI_MMIO_RESERVED_BASE,PCI_MMIO_RESERVED_SIZE,IRQ_BASE,IRQ_MAX};
+
 
 pub use error::{Error,Result};
+use crate::io::PciIrq;
 use crate::vm::kernel_cmdline::KernelCmdLine;
 use crate::vm::VmConfig;
-use crate::virtio::PciIrq;
 use crate::vm::kvm_vm::KvmVm;
 
 pub fn create_setup(config: &VmConfig) -> X86ArchSetup {

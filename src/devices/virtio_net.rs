@@ -1,7 +1,4 @@
-use crate::virtio::{VirtioDeviceOps, VirtQueue, VirtioBus, Chain};
-use crate::memory::MemoryManager;
-use crate::{system, virtio};
-use std::sync::{RwLock, Arc};
+use crate::system;
 use std::{result, thread, io};
 use crate::system::{EPoll,Event};
 use std::io::{Read, Write};
@@ -9,8 +6,8 @@ use std::os::unix::io::AsRawFd;
 use crate::system::Tap;
 
 use thiserror::Error;
+use crate::io::{Chain, FeatureBits, Queues, VirtioDevice, VirtioDeviceType, VirtQueue};
 
-const VIRTIO_ID_NET: u16 = 1;
 const MAC_ADDR_LEN: usize = 6;
 
 #[derive(Debug,Error)]
@@ -46,23 +43,16 @@ const VIRTIO_NET_F_HOST_ECN: u64 = 1 << 13;
 const VIRTIO_NET_HDR_SIZE: i32 = 12;
 
 pub struct VirtioNet {
-    _features_supported: u64,
+    features: FeatureBits,
     tap: Option<Tap>,
 }
 
 impl VirtioNet {
-    fn new(tap: Tap, features_supported: u64) -> Self {
-        VirtioNet{
-            _features_supported: features_supported,
-            tap: Some(tap)
-        }
-    }
-
-    pub fn create(vbus: &mut VirtioBus, tap: Tap) -> virtio::Result<()> {
+    pub fn new(tap: Tap) -> Self {
         tap.set_offload(TUN_F_CSUM | TUN_F_TSO4 | TUN_F_TSO6| TUN_F_TSO_ECN).unwrap();
         tap.set_vnet_hdr_size(VIRTIO_NET_HDR_SIZE).unwrap();
         let feature_bits =
-                VIRTIO_NET_F_CSUM |
+            VIRTIO_NET_F_CSUM |
                 VIRTIO_NET_F_GUEST_CSUM |
                 VIRTIO_NET_F_GUEST_TSO4 |
                 VIRTIO_NET_F_GUEST_TSO6 |
@@ -70,25 +60,44 @@ impl VirtioNet {
                 VIRTIO_NET_F_HOST_TSO4 |
                 VIRTIO_NET_F_HOST_TSO6 |
                 VIRTIO_NET_F_HOST_ECN;
-
-        let dev = Arc::new(RwLock::new(VirtioNet::new(tap, feature_bits)));
-        vbus.new_virtio_device(VIRTIO_ID_NET, dev)
-            .set_queue_sizes(&[256, 256])
-            .set_config_size(MAC_ADDR_LEN)
-            .set_features(feature_bits)
-            .register()
+        let features = FeatureBits::new_default(feature_bits);
+        VirtioNet{
+            features,
+            tap: Some(tap)
+        }
     }
+
 }
 
-pub const TUN_F_CSUM: u32 = 1;
-pub const TUN_F_TSO4: u32 = 2;
-pub const TUN_F_TSO6: u32 = 4;
-pub const TUN_F_TSO_ECN: u32 = 8;
+impl VirtioDevice for VirtioNet {
+    fn features(&self) -> &FeatureBits {
+        &self.features
+    }
 
-impl VirtioDeviceOps for VirtioNet {
-    fn start(&mut self, _memory: &MemoryManager, mut queues: Vec<VirtQueue>) {
-        let tx = queues.pop().unwrap();
-        let rx = queues.pop().unwrap();
+    fn queue_sizes(&self) -> &[u16] {
+        &[256, 256]
+    }
+
+    fn device_type(&self) -> VirtioDeviceType {
+        VirtioDeviceType::Net
+    }
+
+    fn config_size(&self) -> usize {
+        MAC_ADDR_LEN
+    }
+
+    fn read_config(&self, offset: u64, data: &mut [u8]) {
+        let (_,_) = (offset, data);
+    }
+
+    fn write_config(&mut self, offset: u64, data: &[u8]) {
+        let (_,_) = (offset, data);
+    }
+
+    fn start(&mut self, queues: &Queues) {
+        let rx = queues.get_queue(0);
+        let tx = queues.get_queue(1);
+
         let tap = self.tap.take().unwrap();
         let poll = match EPoll::new() {
             Ok(poll) => poll,
@@ -105,6 +114,11 @@ impl VirtioDeviceOps for VirtioNet {
         });
     }
 }
+pub const TUN_F_CSUM: u32 = 1;
+pub const TUN_F_TSO4: u32 = 2;
+pub const TUN_F_TSO6: u32 = 4;
+pub const TUN_F_TSO_ECN: u32 = 8;
+
 
 const MAX_BUFFER_SIZE: usize = 65562;
 const RX_VQ_TOKEN:u64 = 1;

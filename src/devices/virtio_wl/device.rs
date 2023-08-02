@@ -1,16 +1,15 @@
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::sync::{RwLock, Arc};
 use std::thread;
 
-use crate::{system, virtio};
+use crate::system;
 use crate::system::EPoll;
 use crate::memory::{MemoryManager, DrmDescriptor};
-use crate::virtio::{VirtQueue, VirtioBus, VirtioDeviceOps, Chain};
 
 use crate::devices::virtio_wl::{vfd::VfdManager, consts::*, Error, Result, VfdObject};
 use crate::system::ioctl::ioctl_with_ref;
 use std::os::raw::{c_ulong, c_uint, c_ulonglong};
 use vmm_sys_util::eventfd::EventFd;
+use crate::io::{Chain, FeatureBits, Queues, VirtioDevice, VirtioDeviceType, VirtQueue};
 
 #[repr(C)]
 struct dma_buf_sync {
@@ -20,25 +19,21 @@ const DMA_BUF_IOCTL_BASE: c_uint = 0x62;
 const DMA_BUF_IOCTL_SYNC: c_ulong = iow!(DMA_BUF_IOCTL_BASE, 0, ::std::mem::size_of::<dma_buf_sync>() as i32);
 
 pub struct VirtioWayland {
-    feature_bits: u64,
+    features: FeatureBits,
     enable_dmabuf: bool,
 }
 
 impl VirtioWayland {
-    fn new(enable_dmabuf: bool) -> Self {
-        VirtioWayland { feature_bits: 0, enable_dmabuf }
-    }
-
-    pub fn create(vbus: &mut VirtioBus, dmabuf: bool) -> virtio::Result<()> {
-        let dev = Arc::new(RwLock::new(VirtioWayland::new(dmabuf)));
-        vbus.new_virtio_device(VIRTIO_ID_WL, dev)
-            .set_num_queues(2)
-            .set_features(VIRTIO_WL_F_TRANS_FLAGS as u64)
-            .register()
+    pub fn new(enable_dmabuf: bool) -> Self {
+        let features = FeatureBits::new_default(VIRTIO_WL_F_TRANS_FLAGS as u64);
+        VirtioWayland {
+            features,
+            enable_dmabuf
+        }
     }
 
     fn transition_flags(&self) -> bool {
-        self.feature_bits & VIRTIO_WL_F_TRANS_FLAGS as u64 != 0
+        self.features.has_guest_bit(VIRTIO_WL_F_TRANS_FLAGS as u64)
     }
 
     fn create_device(memory: MemoryManager, in_vq: VirtQueue, out_vq: VirtQueue, transition: bool, enable_dmabuf: bool) -> Result<WaylandDevice> {
@@ -48,21 +43,28 @@ impl VirtioWayland {
     }
 }
 
-impl VirtioDeviceOps for VirtioWayland {
-    fn enable_features(&mut self, bits: u64) -> bool {
-        self.feature_bits = bits;
-        true
+impl VirtioDevice for VirtioWayland {
+    fn features(&self) -> &FeatureBits {
+        &self.features
     }
 
-    fn start(&mut self, memory: &MemoryManager, mut queues: Vec<VirtQueue>) {
+    fn queue_sizes(&self) -> &[u16] {
+        &[VirtQueue::DEFAULT_QUEUE_SIZE, VirtQueue::DEFAULT_QUEUE_SIZE]
+    }
+
+    fn device_type(&self) -> VirtioDeviceType {
+        VirtioDeviceType::Wl
+    }
+
+    fn start(&mut self, queues: &Queues) {
         thread::spawn({
-            let memory = memory.clone();
             let transition = self.transition_flags();
             let enable_dmabuf = self.enable_dmabuf;
+            let in_vq = queues.get_queue(0);
+            let out_vq = queues.get_queue(1);
+            let memory = queues.memory().clone();
             move || {
-                let out_vq = queues.pop().unwrap();
-                let in_vq = queues.pop().unwrap();
-                let mut dev = match Self::create_device(memory.clone(), in_vq, out_vq,transition, enable_dmabuf) {
+                let mut dev = match Self::create_device(memory, in_vq, out_vq,transition, enable_dmabuf) {
                     Err(e) => {
                         warn!("Error creating virtio wayland device: {}", e);
                         return;

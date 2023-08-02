@@ -1,13 +1,9 @@
 use crate::vm::{VmConfig, Result, Error, PHINIT, SOMMELIER};
 use crate::vm::arch::ArchSetup;
 use crate::vm::kernel_cmdline::KernelCmdLine;
-use crate::vm::io::IoDispatcher;
-use crate::devices;
 use termios::Termios;
-use crate::virtio::VirtioBus;
-use crate::virtio;
-use crate::devices::SyntheticFS;
-use std::{fs, thread};
+use crate::devices::{SyntheticFS, VirtioBlock, VirtioNet, VirtioP9, VirtioRandom, VirtioSerial, VirtioWayland};
+use std::{env, fs, thread};
 use crate::system::{Tap, NetlinkSocket};
 use crate::disk::DiskImage;
 use std::sync::Arc;
@@ -15,6 +11,10 @@ use crate::memory::MemoryManager;
 use std::sync::atomic::AtomicBool;
 use kvm_ioctls::VmFd;
 use vmm_sys_util::eventfd::EventFd;
+use crate::devices::ac97::{Ac97Dev, Ac97Parameters};
+use crate::devices::serial::SerialPort;
+use crate::io::manager::IoManager;
+use crate::{Logger, LogLevel};
 use crate::vm::kvm_vm::KvmVm;
 use crate::vm::vcpu::Vcpu;
 
@@ -22,12 +22,12 @@ pub struct Vm {
     kvm_vm: KvmVm,
     vcpus: Vec<Vcpu>,
     memory: MemoryManager,
-    io_dispatch: Arc<IoDispatcher>,
+    io_manager: IoManager,
     termios: Option<Termios>,
 }
 
 impl Vm {
-    fn create<A: ArchSetup>(arch: &mut A, reset_evt: EventFd) -> Result<Self> {
+    fn create<A: ArchSetup>(arch: &mut A) -> Result<Self> {
         let kvm_vm = KvmVm::open()?;
         kvm_vm.create_irqchip()?;
         kvm_vm.vm_fd().set_tss_address(0xfffbd000)
@@ -36,11 +36,13 @@ impl Vm {
         let memory = arch.create_memory(kvm_vm.clone())
             .map_err(Error::ArchError)?;
 
+        let io_manager = IoManager::new(memory.clone());
+
         Ok(Vm {
             kvm_vm,
             memory,
+            io_manager,
             vcpus: Vec::new(),
-            io_dispatch: IoDispatcher::new(reset_evt),
             termios: None,
         })
     }
@@ -89,14 +91,16 @@ impl <T: ArchSetup> VmSetup <T> {
 
     pub fn create_vm(&mut self) -> Result<Vm> {
         let exit_evt = EventFd::new(libc::EFD_NONBLOCK)?;
-        let reset_evt = exit_evt.try_clone()?;
-        let mut vm = Vm::create(&mut self.arch, reset_evt)?;
+        let mut vm = Vm::create(&mut self.arch)?;
 
-        devices::rtc::Rtc::register(vm.io_dispatch.clone());
+        let reset_evt = exit_evt.try_clone()?;
+        vm.io_manager.register_legacy_devices(reset_evt);
+
 
         if self.config.verbose() {
+            Logger::set_log_level(LogLevel::Info);
             self.cmdline.push("earlyprintk=serial");
-            devices::serial::SerialDevice::register(vm.kvm_vm.clone(),vm.io_dispatch.clone(), 0);
+            vm.io_manager.register_serial_port(SerialPort::COM1);
         } else {
             self.cmdline.push("quiet");
         }
@@ -115,36 +119,50 @@ impl <T: ArchSetup> VmSetup <T> {
             .map_err(Error::TerminalTermios)?;
         vm.termios = Some(saved);
 
-        let mut virtio = VirtioBus::new(vm.memory.clone(), vm.io_dispatch.clone(), vm.kvm_vm.clone());
-        self.setup_synthetic_bootfs(&mut virtio)?;
-        self.setup_virtio(&mut virtio)
-            .map_err(Error::SetupVirtio)?;
+        self.setup_synthetic_bootfs(&mut vm.io_manager)?;
+        self.setup_virtio(&mut vm.io_manager)?;
+
+        if self.config.is_audio_enable() {
+
+            if unsafe { libc::geteuid() } == 0 {
+                self.drop_privs();
+            }
+            env::set_var("HOME", "/home/citadel");
+            env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+            let irq = vm.io_manager.allocator().allocate_irq();
+            let mem = vm.memory.guest_ram().clone();
+            // XXX expect()
+            let ac97 = Ac97Dev::try_new(&vm.kvm_vm, irq, mem, Ac97Parameters::new_pulseaudio()).expect("audio initialize error");
+            vm.io_manager.add_pci_device(Arc::new(Mutex::new(ac97)));
+
+        }
 
         if let Some(init_cmd) = self.config.get_init_cmdline() {
             self.cmdline.push_set_val("init", init_cmd);
         }
 
-        self.arch.setup_memory(&self.cmdline, &virtio.pci_irqs())
+        let pci_irqs = vm.io_manager.pci_irqs();
+        self.arch.setup_memory(&self.cmdline, &pci_irqs)
             .map_err(Error::ArchError)?;
 
         let shutdown = Arc::new(AtomicBool::new(false));
         for id in 0..self.config.ncpus() {
-            let vcpu = vm.kvm_vm.create_vcpu(id as u64, vm.io_dispatch.clone(), shutdown.clone(), &mut self.arch)?;
+            let vcpu = vm.kvm_vm.create_vcpu(id as u64, vm.io_manager.clone(), shutdown.clone(), &mut self.arch)?;
             vm.vcpus.push(vcpu);
         }
         Ok(vm)
     }
 
-    fn setup_virtio(&mut self, virtio: &mut VirtioBus) -> virtio::Result<()> {
-        devices::VirtioSerial::create(virtio)?;
-        devices::VirtioRandom::create(virtio)?;
+    fn setup_virtio(&mut self, io_manager: &mut IoManager) -> Result<()> {
+        io_manager.add_virtio_device(VirtioSerial::new())?;
+        io_manager.add_virtio_device(VirtioRandom::new())?;
 
         if self.config.is_wayland_enabled() {
-            devices::VirtioWayland::create(virtio, self.config.is_dmabuf_enabled())?;
+            io_manager.add_virtio_device(VirtioWayland::new(self.config.is_dmabuf_enabled()))?;
         }
 
         let homedir = self.config.homedir();
-        devices::VirtioP9::create(virtio, "home", homedir, false, false)?;
+        io_manager.add_virtio_device(VirtioP9::new_filesystem("home", homedir, false, false))?;
         if homedir != "/home/user" && !self.config.is_realm() {
             self.cmdline.push_set_val("phinit.home", homedir);
         }
@@ -155,14 +173,14 @@ impl <T: ArchSetup> VmSetup <T> {
             if block_root == None {
                 block_root = Some(disk.read_only());
             }
-            devices::VirtioBlock::create(virtio, disk)?;
+            io_manager.add_virtio_device(VirtioBlock::new(disk))?;
         }
 
         for disk in self.config.get_raw_disk_images() {
             if block_root == None {
                 block_root = Some(disk.read_only());
             }
-            devices::VirtioBlock::create(virtio, disk)?;
+            io_manager.add_virtio_device(VirtioBlock::new(disk))?;
         }
 
         if let Some(read_only) = block_root {
@@ -172,14 +190,14 @@ impl <T: ArchSetup> VmSetup <T> {
             self.cmdline.push("phinit.root=/dev/vda");
             self.cmdline.push("phinit.rootfstype=ext4");
         } else {
-            devices::VirtioP9::create(virtio, "9proot", "/", true, false)?;
+            io_manager.add_virtio_device(VirtioP9::new_filesystem("9proot", "/", true, false))?;
             self.cmdline.push_set_val("phinit.root", "9proot");
             self.cmdline.push_set_val("phinit.rootfstype", "9p");
             self.cmdline.push_set_val("phinit.rootflags", "trans=virtio");
         }
 
         if self.config.network() {
-            self.setup_network(virtio)?;
+            self.setup_network(io_manager)?;
             self.drop_privs();
 
         }
@@ -196,12 +214,11 @@ impl <T: ArchSetup> VmSetup <T> {
 
     }
 
-    fn setup_synthetic_bootfs(&mut self, virtio: &mut VirtioBus) -> Result<()> {
+    fn setup_synthetic_bootfs(&mut self, io_manager: &mut IoManager) -> Result<()> {
         let bootfs = self.create_bootfs()
             .map_err(Error::SetupBootFs)?;
 
-        devices::VirtioP9::create_with_filesystem(bootfs, virtio, "/dev/root", "/", false)
-            .map_err(Error::SetupVirtio)?;
+        io_manager.add_virtio_device(VirtioP9::new(bootfs, "/dev/root", "/", false))?;
 
         self.cmdline.push_set_val("init", "/usr/bin/ph-init");
         self.cmdline.push_set_val("root", "/dev/root");
@@ -211,7 +228,7 @@ impl <T: ArchSetup> VmSetup <T> {
         Ok(())
     }
 
-    fn create_bootfs(&self) -> ::std::io::Result<SyntheticFS> {
+    fn create_bootfs(&self) -> std::io::Result<SyntheticFS> {
         let mut s = SyntheticFS::new();
         s.mkdirs(&["/tmp", "/proc", "/sys", "/dev", "/home/user", "/bin", "/etc"]);
 
@@ -226,7 +243,7 @@ impl <T: ArchSetup> VmSetup <T> {
         Ok(s)
     }
 
-    fn setup_network(&mut self, virtio: &mut VirtioBus) -> virtio::Result<()> {
+    fn setup_network(&mut self, io_manager: &mut IoManager) -> Result<()> {
         let tap = match self.setup_tap() {
             Ok(tap) => tap,
             Err(e) => {
@@ -234,7 +251,7 @@ impl <T: ArchSetup> VmSetup <T> {
                 return Ok(());
             }
         };
-        devices::VirtioNet::create(virtio, tap)?;
+        io_manager.add_virtio_device(VirtioNet::new(tap))?;
         self.cmdline.push("phinit.ip=172.17.0.22");
         Ok(())
     }

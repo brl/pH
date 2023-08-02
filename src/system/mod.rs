@@ -5,6 +5,7 @@ mod socket;
 mod filedesc;
 mod memfd;
 mod tap;
+//pub mod priority;
 pub mod netlink;
 
 pub use filedesc::{FileDesc, FileFlags};
