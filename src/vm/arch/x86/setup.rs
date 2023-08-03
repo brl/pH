@@ -1,11 +1,11 @@
 use kvm_bindings::CpuId;
 use kvm_ioctls::VcpuFd;
+use crate::io::PciIrq;
 use crate::memory::{MemoryManager, GuestRam, SystemAllocator, AddressRange};
 use crate::vm::VmConfig;
-use crate::vm::arch::{ArchSetup, Error, Result};
+use crate::vm::arch::{ArchSetup, Error, PCI_MMIO_RESERVED_BASE, Result};
 use crate::vm::kernel_cmdline::KernelCmdLine;
-use crate::virtio::PciIrq;
-use crate::vm::arch::x86::memory::{x86_setup_memory_regions, x86_setup_memory};
+use crate::vm::arch::x86::memory::{x86_setup_memory_regions, x86_setup_memory, HIMEM_BASE};
 use crate::vm::arch::x86::cpuid::setup_cpuid;
 use crate::vm::arch::x86::registers::{setup_pm_sregs, setup_pm_regs, setup_fpu, setup_msrs};
 use crate::vm::arch::x86::interrupts::setup_lapic;
@@ -32,19 +32,36 @@ impl X86ArchSetup {
     }
 }
 
-fn get_base_dev_pfn(mem_size: u64) -> u64 {
-    // Put device memory at a 2MB boundary after physical memory or 4gb, whichever is greater.
-    const MB: u64 = 1024 * 1024;
-    const GB: u64 = 1024 * MB;
-    let mem_size_round_2mb = (mem_size + 2 * MB - 1) / (2 * MB) * (2 * MB);
-    std::cmp::max(mem_size_round_2mb, 4 * GB) / 4096
+fn arch_memory_regions(mem_size: usize) -> Vec<(u64, usize)> {
+    match mem_size.checked_sub(PCI_MMIO_RESERVED_BASE as usize) {
+        None | Some(0) => vec![(0, mem_size)],
+        Some(remaining) => vec![
+            (0, PCI_MMIO_RESERVED_BASE as usize),
+            (HIMEM_BASE, remaining),
+        ],
+    }
 }
+
+fn device_memory_start(regions: &[(u64, usize)]) -> u64 {
+    let top = regions.last().map(|&(base, size)| {
+        base + size as u64
+    }).unwrap();
+    // Put device memory at a 2MB boundary after physical memory or 4gb, whichever is greater.
+    const MB: u64 = 1 << 20;
+    const TWO_MB: u64 = 2 * MB;
+    const FOUR_GB: u64 = 4 * 1024 * MB;
+    let dev_base_round_2mb = (top + TWO_MB - 1) & !(TWO_MB - 1);
+    std::cmp::max(dev_base_round_2mb, FOUR_GB)
+}
+
 
 impl ArchSetup for X86ArchSetup {
     fn create_memory(&mut self, kvm_vm: KvmVm) -> Result<MemoryManager> {
         let ram = GuestRam::new(self.ram_size);
-        let dev_addr_start = get_base_dev_pfn(self.ram_size as u64) * 4096;
-        let dev_addr_size = u64::max_value() - dev_addr_start;
+        let regions = arch_memory_regions(self.ram_size);
+        let dev_addr_start = device_memory_start(&regions);
+
+        let dev_addr_size = u64::MAX - dev_addr_start;
         let allocator = SystemAllocator::new(AddressRange::new(dev_addr_start,dev_addr_size as usize));
         let mut mm = MemoryManager::new(kvm_vm, ram, allocator, self.use_drm)
             .map_err(Error::MemoryManagerCreate)?;
