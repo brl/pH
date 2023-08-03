@@ -34,7 +34,7 @@ impl VmConfig {
     pub fn new() -> VmConfig {
         let mut config = VmConfig {
             ram_size: 256 * 1024 * 1024,
-            ncpus: 1,
+            ncpus: 4,
             verbose: false,
             rootshell: false,
             wayland: true,
