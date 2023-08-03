@@ -1,5 +1,5 @@
 use std::fs;
-use crate::{Error, sys, warn};
+use crate::{Error, sys};
 use crate::error::Result;
 use std::path::Path;
 

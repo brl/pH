@@ -7,6 +7,11 @@ use crate::error::{Result,Error};
 use libc;
 use std::path::Path;
 
+pub fn set_umask(mode: u32) {
+    unsafe {
+        let _ = libc::umask(mode);
+    }
+}
 
 pub fn mount_tmpfs(target: &str) -> Result<()> {
     mount("tmpfs", target, "tmpfs", 0, Some("mode=755"))

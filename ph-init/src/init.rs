@@ -1,7 +1,7 @@
 
-use crate::{Error, Result, Logger, LogLevel, netlink};
+use crate::{Error, Result, Logger, LogLevel, netlink, sys};
 use crate::cmdline::CmdLine;
-use crate::sys::{sethostname, setsid, set_controlling_tty, mount_devtmpfs, mount_tmpfs, mkdir, umount, mount_sysfs, mount_procfs, mount_devpts, chown, chmod, create_directories, mount_overlay, move_mount, pivot_root, mount_9p, mount, waitpid, reboot, getpid, mount_tmpdir, mount_cgroup, mkdir_mode, umask, _chown};
+use crate::sys::{sethostname, setsid, set_controlling_tty, mount_devtmpfs, mount_tmpfs, mkdir, umount, mount_sysfs, mount_procfs, mount_devpts, chown, chmod, create_directories, mount_overlay, move_mount, pivot_root, mount_9p, mount, waitpid, reboot, getpid, mount_tmpdir, mount_cgroup, umask, _chown};
 use std::path::Path;
 use std::{fs, process, io, env};
 use crate::service::{Service, ServiceLaunch};
@@ -90,6 +90,7 @@ impl InitServer {
     }
 
     pub fn setup_filesystem(&self) -> Result<()> {
+        sys::set_umask(0o022);
         //mount_devtmpfs()?;
         mount_tmpfs("/tmp")?;
         mkdir("/tmp/sysroot")?;
@@ -223,7 +224,8 @@ impl InitServer {
             return Ok(());
         }
 
-        mkdir_mode("/tmp/.X11-unix", 0o1777)?;
+        mkdir("/tmp/.X11-unix")?;
+        chmod("/tmp/.X11-unix", 0o1777)?;
         self.write_xauth().map_err(Error::XAuthFail)?;
 
         let sommelierx = ServiceLaunch::new("sommelier-x", "/opt/ph/usr/bin/sommelier")
@@ -249,6 +251,7 @@ impl InitServer {
                 self.configure_network(ip)
                     .map_err(Error::NetworkConfigure)?;
             }
+            sys::bind_mount("/opt/ph/etc/resolv.conf", "/etc/resolv.conf")?;
         }
         Ok(())
     }
