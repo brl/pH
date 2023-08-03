@@ -6,7 +6,7 @@ use crate::devices::{SyntheticFS, VirtioBlock, VirtioNet, VirtioP9, VirtioRandom
 use std::{env, fs, thread};
 use crate::system::{Tap, NetlinkSocket};
 use crate::disk::DiskImage;
-use std::sync::Arc;
+use std::sync::{Arc, Barrier, Mutex};
 use crate::memory::MemoryManager;
 use std::sync::atomic::AtomicBool;
 use kvm_ioctls::VmFd;
@@ -48,10 +48,14 @@ impl Vm {
     }
 
     pub fn start(&mut self) -> Result<()> {
+        let barrier = Arc::new(Barrier::new(self.vcpus.len()));
         let mut handles = Vec::new();
         for vcpu in self.vcpus.drain(..) {
-            let h = thread::spawn(move || {
-                vcpu.run();
+            let h = thread::spawn({
+                let barrier = barrier.clone();
+                move || {
+                    vcpu.run(&barrier);
+                }
             });
             handles.push(h);
         }
@@ -240,6 +244,7 @@ impl <T: ArchSetup> VmSetup <T> {
         s.add_memory_file("/usr/bin", "sommelier", 0o755, SOMMELIER)?;
 
         s.add_file("/etc", "ld.so.cache", 0o644, "/etc/ld.so.cache");
+        s.add_file("/etc", "resolv.conf", 0o644, "/run/NetworkManager/resolv.conf");
         Ok(s)
     }
 
