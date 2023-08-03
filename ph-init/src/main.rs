@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate lazy_static;
 
+mod audio;
 #[macro_use]
 mod log;
 mod error;

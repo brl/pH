@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::net::Ipv4Addr;
 use std::str::FromStr;
+use crate::audio::AudioSupport;
 use crate::netlink::NetlinkSocket;
 
 const BASHRC: &str = r#"
@@ -116,6 +117,8 @@ impl InitServer {
         mkdir("/run/user")?;
         mkdir("/run/user/1000")?;
         chown("/run/user/1000", 1000,1000)?;
+
+        AudioSupport::setup()?;
 
         self.mount_home_if_exists()?;
         Logger::set_file_output("/run/phinit.log")

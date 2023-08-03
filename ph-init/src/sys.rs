@@ -69,6 +69,11 @@ pub fn move_mount(source: &str, target: &str) -> Result<()> {
         .map_err(|e| Error::MoveMount(source.to_string(), target.to_string(), e))
 }
 
+pub fn bind_mount(source: &str, target: &str) -> Result<()> {
+    mount(source, target, "", libc::MS_BIND, None)
+        .map_err(|e| Error::BindMount(source.to_string(), target.to_string(), e))
+}
+
 pub fn mount_9p(name: &str, target: &str) -> Result<()> {
     const MS_LAZYTIME: libc::c_ulong = 1 << 25;
     mount(name, target, "9p",

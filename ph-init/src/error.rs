@@ -30,6 +30,8 @@ pub enum Error {
     MountOverlay(io::Error),
     #[error("failed to move mount from {0} to {1}: {2}")]
     MoveMount(String, String, io::Error),
+    #[error("failed to bind mount from {0} to {1}: {2}")]
+    BindMount(String, String, io::Error),
     #[error("failed to mount 9p volume {0} at {1}: {2}")]
     Mount9P(String, String, io::Error),
     #[error("failed to unmount {0}: {1}")]
@@ -68,6 +70,10 @@ pub enum Error {
     WriteBashrc(io::Error),
     #[error("error configuring network: {0}")]
     NetworkConfigure(netlink::Error),
+    #[error("error reading /dev/snd: {0}")]
+    DevSndReadDir(io::Error),
+    #[error("error writing pulse audio config file: {0}")]
+    PulseAudioConfigWrite(io::Error),
 }
 
 pub type Result<T> = result::Result<T, Error>;
