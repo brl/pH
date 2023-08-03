@@ -11,7 +11,7 @@ use crate::memory::MemoryManager;
 use std::sync::atomic::AtomicBool;
 use kvm_ioctls::VmFd;
 use vmm_sys_util::eventfd::EventFd;
-use crate::devices::ac97::{Ac97Dev, Ac97Parameters};
+use crate::devices::ac97::Ac97Dev;
 use crate::devices::serial::SerialPort;
 use crate::io::manager::IoManager;
 use crate::{Logger, LogLevel};
@@ -132,7 +132,7 @@ impl <T: ArchSetup> VmSetup <T> {
             let irq = vm.io_manager.allocator().allocate_irq();
             let mem = vm.memory.guest_ram().clone();
             // XXX expect()
-            let ac97 = Ac97Dev::try_new(&vm.kvm_vm, irq, mem, Ac97Parameters::new_pulseaudio()).expect("audio initialize error");
+            let ac97 = Ac97Dev::try_new(&vm.kvm_vm, irq, mem).expect("audio initialize error");
             vm.io_manager.add_pci_device(Arc::new(Mutex::new(ac97)));
 
         }

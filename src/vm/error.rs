@@ -1,10 +1,12 @@
 use std::{result, io};
 use kvm_ioctls::Cap;
-use crate::{system, virtio};
+use crate::system;
 use crate::system::netlink;
 use crate::vm::arch;
 
 use thiserror::Error;
+use crate::io::virtio;
+
 pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Error,Debug)]
@@ -37,4 +39,6 @@ pub enum Error {
     SetupVirtio(virtio::Error),
     #[error("failed to create Vcpu: {0}")]
     CreateVcpu(kvm_ioctls::Error),
+    #[error("{0}")]
+    VirtioError(#[from]crate::io::VirtioError),
 }

@@ -16,4 +16,5 @@ thiserror = "1.0"
 vmm-sys-util = "0.11.1"
 kvm-ioctls = "0.12.0"
 kvm-bindings = "0.6.0"
+pulse = { version = "2.27.1", package = "libpulse-binding" }
 libcitadel = { git = "https://github.com/brl/citadel-tools", rev="44d5ce660f1f5cf8a3ad1060b143926a99be5148" }

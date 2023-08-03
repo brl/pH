@@ -7,8 +7,9 @@ pub mod util;
 mod vm;
 mod memory;
 mod devices;
-mod virtio;
 mod disk;
+mod io;
+mod audio;
 
 pub use util::{Logger,LogLevel};
 pub use vm::VmConfig;

@@ -15,6 +15,7 @@ pub struct VmConfig {
     wayland: bool,
     dmabuf: bool,
     network: bool,
+    audio: bool,
     home: String,
     colorscheme: String,
     bridge_name: String,
@@ -39,6 +40,7 @@ impl VmConfig {
             wayland: true,
             dmabuf: false,
             network: true,
+            audio: true,
             bridge_name: "vz-clear".to_string(),
             home: Self::default_homedir(),
             colorscheme: "dracula".to_string(),
@@ -211,6 +213,10 @@ impl VmConfig {
 
     pub fn is_dmabuf_enabled(&self) -> bool {
         self.dmabuf
+    }
+
+    pub fn is_audio_enable(&self) -> bool {
+        self.audio
     }
 
     pub fn bridge(&self) -> &str {

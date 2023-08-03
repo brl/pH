@@ -13,6 +13,7 @@ fn add_defaults(cmdline: &mut KernelCmdLine) {
 
         .push("init_on_alloc=0")
         .push("init_on_free=0")
+
         .push_set_val("console", "hvc0")
 
         .push("i8042.direct")
@@ -20,10 +21,12 @@ fn add_defaults(cmdline: &mut KernelCmdLine) {
         .push("i8042.nopnp")
         .push("i8042.noaux")
         .push("i8042.nomux")
-   //     .push("initcall_debug")
+
         .push_set_val("iommu", "off")
         .push("cryptomgr.notests")
 
+        .push("snd_intel8x0.inside_vm=1")
+        .push("snd_intel8x0.ac97_clock=48000")
         .push_set_val("8250.nr_uarts", "0");
 }
 

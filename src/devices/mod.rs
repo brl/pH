@@ -1,3 +1,4 @@
+pub mod ac97;
 pub mod serial;
 pub mod rtc;
 mod virtio_9p;
@@ -6,6 +7,7 @@ mod virtio_rng;
 mod virtio_wl;
 mod virtio_block;
 mod virtio_net;
+mod irq_event;
 
 pub use self::virtio_serial::VirtioSerial;
 pub use self::virtio_9p::VirtioP9;
