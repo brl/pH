@@ -1,6 +1,8 @@
 use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard};
 use byteorder::{ByteOrder, LittleEndian};
+use vm_memory::GuestMemoryMmap;
+use crate::io::address::AddressRange;
 
 use crate::io::busdata::{ReadableInt, WriteableInt};
 use crate::io::pci::{PciBar, PciBarAllocation, PciConfiguration, PciDevice};
@@ -9,7 +11,7 @@ use crate::io::virtio::features::FeatureBits;
 use crate::io::virtio::queues::Queues;
 use crate::io::virtio::Result;
 use crate::io::PCI_VENDOR_ID_REDHAT;
-use crate::memory::{AddressRange, MemoryManager};
+use crate::vm::KvmVm;
 
 pub trait VirtioDevice: Send {
 
@@ -41,12 +43,12 @@ pub struct VirtioDeviceState {
 
 impl VirtioDeviceState {
 
-    pub fn new<T: VirtioDevice+'static>(device: T, memory: MemoryManager, irq: u8) -> Result<Self> {
+    pub fn new<T: VirtioDevice+'static>(device: T, kvm_vm: KvmVm, guest_memory: GuestMemoryMmap, irq: u8) -> Result<Self> {
         let devtype = device.device_type();
         let config_size = device.config_size();
 
         let device = Arc::new(Mutex::new(device));
-        let queues = Queues::new(memory, irq)?;
+        let queues = Queues::new(kvm_vm, guest_memory, irq)?;
         let mut pci_config = PciConfiguration::new(queues.irq(), PCI_VENDOR_ID_REDHAT, devtype.device_id(), devtype.class_id());
         Self::add_pci_capabilities::<T>(&mut pci_config, config_size);
 

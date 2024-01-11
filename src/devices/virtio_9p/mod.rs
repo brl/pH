@@ -1,8 +1,8 @@
 use std::thread;
 
 use std::path::{PathBuf, Path};
+use vm_memory::GuestMemoryMmap;
 
-use crate::memory::GuestRam;
 use crate::devices::virtio_9p::server::Server;
 use crate::devices::virtio_9p::filesystem::{FileSystem, FileSystemOps};
 use self::pdu::PduParser;
@@ -85,13 +85,13 @@ impl <T: FileSystemOps+'static> VirtioDevice for VirtioP9<T> {
         let vq = queues.get_queue(0);
         let root_dir = self.root_dir.clone();
         let filesystem = self.filesystem.clone();
-        let ram = queues.memory().guest_ram().clone();
+        let memory = queues.guest_memory().clone();
         let debug = self.debug;
-        thread::spawn(move || run_device(ram, vq, &root_dir, filesystem, debug));
+        thread::spawn(move || run_device(memory, vq, &root_dir, filesystem, debug));
     }
 }
 
-fn run_device<T: FileSystemOps>(memory: GuestRam, vq: VirtQueue, root_dir: &Path, filesystem: T, debug: bool) {
+fn run_device<T: FileSystemOps>(memory: GuestMemoryMmap, vq: VirtQueue, root_dir: &Path, filesystem: T, debug: bool) {
     let mut server = Server::new(&root_dir, filesystem);
 
     if debug {

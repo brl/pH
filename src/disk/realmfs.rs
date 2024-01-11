@@ -1,6 +1,7 @@
 use crate::disk::{Result, DiskImage, SECTOR_SIZE, RawDiskImage, OpenType};
 use std::fs::File;
 use std::path::PathBuf;
+use vm_memory::VolatileSlice;
 
 // skip 4096 byte realmfs header
 const HEADER_SECTOR_COUNT: usize = 8;
@@ -35,11 +36,11 @@ impl DiskImage for RealmFSImage {
         self.raw.disk_file()
     }
 
-    fn write_sectors(&mut self, start_sector: u64, buffer: &[u8]) -> Result<()> {
+    fn write_sectors(&mut self, start_sector: u64, buffer: &VolatileSlice) -> Result<()> {
         self.raw.write_sectors(start_sector, buffer)
     }
 
-    fn read_sectors(&mut self, start_sector: u64, buffer: &mut [u8]) -> Result<()> {
+    fn read_sectors(&mut self, start_sector: u64, buffer: &mut VolatileSlice) -> Result<()> {
         self.raw.read_sectors(start_sector, buffer)
     }
 

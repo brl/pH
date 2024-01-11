@@ -1,7 +1,7 @@
+use crate::io::address::AddressRange;
 use crate::io::pci::address::PciAddress;
 use crate::io::pci::consts::{PCI_BAR0, PCI_BAR5, PCI_CACHE_LINE_SIZE, PCI_CAP_BASE_OFFSET, PCI_CAP_ID_VENDOR, PCI_CAPABILITY_LIST, PCI_CLASS_DEVICE, PCI_CLASS_REVISION, PCI_COMMAND, PCI_COMMAND_IO, PCI_COMMAND_MEMORY, PCI_DEVICE_ID, PCI_INTERRUPT_LINE, PCI_INTERRUPT_PIN, PCI_STATUS, PCI_STATUS_CAP_LIST, PCI_SUBSYSTEM_ID, PCI_VENDOR_ID};
 use crate::io::pci::device::PciBar;
-use crate::memory::AddressRange;
 use crate::util::{ByteBuffer,Writeable};
 
 const PCI_CONFIG_SPACE_SIZE: usize = 256;
@@ -227,22 +227,3 @@ impl PciConfiguration {
         }
     }
 }
-
-/*
-impl BusDevice for PciConfiguration {
-    fn read(&mut self, offset: u64, data: &mut [u8]) {
-        if Self::is_valid_access(offset, data.len()) {
-            self.read_bytes(offset as usize, data)
-        } else {
-            data.fill(0xff)
-        }
-    }
-
-    fn write(&mut self, offset: u64, data: &[u8]) {
-        if Self::is_valid_access(offset, data.len()) {
-            self.write_config(offset as usize, data);
-        }
-    }
-}
-
- */

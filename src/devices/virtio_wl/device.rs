@@ -3,13 +3,14 @@ use std::thread;
 
 use crate::system;
 use crate::system::EPoll;
-use crate::memory::{MemoryManager, DrmDescriptor};
+use crate::system::drm::DrmDescriptor;
 
 use crate::devices::virtio_wl::{vfd::VfdManager, consts::*, Error, Result, VfdObject};
 use crate::system::ioctl::ioctl_with_ref;
 use std::os::raw::{c_ulong, c_uint, c_ulonglong};
 use vmm_sys_util::eventfd::EventFd;
 use crate::io::{Chain, FeatureBits, Queues, VirtioDevice, VirtioDeviceType, VirtQueue};
+use crate::io::shm_mapper::DeviceSharedMemoryManager;
 
 #[repr(C)]
 struct dma_buf_sync {
@@ -19,14 +20,16 @@ const DMA_BUF_IOCTL_BASE: c_uint = 0x62;
 const DMA_BUF_IOCTL_SYNC: c_ulong = iow!(DMA_BUF_IOCTL_BASE, 0, ::std::mem::size_of::<dma_buf_sync>() as i32);
 
 pub struct VirtioWayland {
+    dev_shm_manager: Option<DeviceSharedMemoryManager>,
     features: FeatureBits,
     enable_dmabuf: bool,
 }
 
 impl VirtioWayland {
-    pub fn new(enable_dmabuf: bool) -> Self {
+    pub fn new(enable_dmabuf: bool , dev_shm_manager: DeviceSharedMemoryManager) -> Self {
         let features = FeatureBits::new_default(VIRTIO_WL_F_TRANS_FLAGS as u64);
         VirtioWayland {
+            dev_shm_manager: Some(dev_shm_manager),
             features,
             enable_dmabuf
         }
@@ -36,9 +39,9 @@ impl VirtioWayland {
         self.features.has_guest_bit(VIRTIO_WL_F_TRANS_FLAGS as u64)
     }
 
-    fn create_device(memory: MemoryManager, in_vq: VirtQueue, out_vq: VirtQueue, transition: bool, enable_dmabuf: bool) -> Result<WaylandDevice> {
+    fn create_device(in_vq: VirtQueue, out_vq: VirtQueue, transition: bool, enable_dmabuf: bool, dev_shm_manager: DeviceSharedMemoryManager) -> Result<WaylandDevice> {
         let kill_evt = EventFd::new(0).map_err(Error::EventFdCreate)?;
-        let dev = WaylandDevice::new(memory, in_vq, out_vq, kill_evt, transition, enable_dmabuf)?;
+        let dev = WaylandDevice::new(in_vq, out_vq, kill_evt, transition, enable_dmabuf, dev_shm_manager)?;
         Ok(dev)
     }
 }
@@ -60,11 +63,11 @@ impl VirtioDevice for VirtioWayland {
         thread::spawn({
             let transition = self.transition_flags();
             let enable_dmabuf = self.enable_dmabuf;
+            let dev_shm_manager = self.dev_shm_manager.take().expect("No dev_shm_manager");
             let in_vq = queues.get_queue(0);
             let out_vq = queues.get_queue(1);
-            let memory = queues.memory().clone();
             move || {
-                let mut dev = match Self::create_device(memory, in_vq, out_vq,transition, enable_dmabuf) {
+                let mut dev = match Self::create_device(in_vq, out_vq,transition, enable_dmabuf, dev_shm_manager) {
                     Err(e) => {
                         warn!("Error creating virtio wayland device: {}", e);
                         return;
@@ -92,8 +95,9 @@ impl WaylandDevice {
     const KILL_TOKEN: u64 = 2;
     const VFDS_TOKEN: u64 = 3;
 
-    fn new(mm: MemoryManager, in_vq: VirtQueue, out_vq: VirtQueue, kill_evt: EventFd, use_transition: bool, enable_dmabuf: bool) -> Result<Self> {
-        let vfd_manager = VfdManager::new(mm, use_transition, in_vq, "/run/user/1000/wayland-0")?;
+    fn new(in_vq: VirtQueue, out_vq: VirtQueue, kill_evt: EventFd, use_transition: bool, enable_dmabuf: bool, dev_shm_manager: DeviceSharedMemoryManager) -> Result<Self> {
+        let vfd_manager = VfdManager::new(dev_shm_manager, use_transition, in_vq, "/run/user/1000/wayland-0")?;
+
         Ok(WaylandDevice {
             vfd_manager,
             out_vq,
@@ -219,7 +223,7 @@ impl <'a> MessageHandler<'a> {
         self.chain.w32(id)?;
         self.chain.w32(flags)?;
         self.chain.w64(pfn)?;
-        self.chain.w32(size as u32)?;
+        self.chain.w32(size)?;
         self.responded = true;
         Ok(())
     }
@@ -306,9 +310,9 @@ impl <'a> MessageHandler<'a> {
         };
 
         if let Some(fds) = send_fds.as_ref() {
-            vfd.send_with_fds(data, fds)?;
+            vfd.send_with_fds(&data, fds)?;
         } else {
-            vfd.send(data)?;
+            vfd.send(&data)?;
         }
         self.send_ok()
     }

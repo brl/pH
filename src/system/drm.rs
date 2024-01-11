@@ -1,19 +1,37 @@
 use std::fs::{OpenOptions, File};
+use std::os::fd::FromRawFd;
 use std::os::raw::{c_ulong, c_int, c_uint};
 use std::os::unix::io::{RawFd,AsRawFd};
 use std::path::Path;
+use std::{io, result};
 use std::sync::Arc;
 
-use crate::system::{self, ioctl::ioctl_with_mut_ref, FileDesc };
-use crate::memory::{Error,Result};
+use crate::system::{self, ioctl::ioctl_with_mut_ref};
 
-#[derive(Default,Debug)]
+use thiserror::Error;
+
+pub type Result<T> = result::Result<T, Error>;
+
+#[derive(Debug,Error)]
+pub enum Error {
+    #[error("failed to open device with libgbm: {0}")]
+    GbmCreateDevice(system::Error),
+    #[error("failed to allocate buffer with libgbm: {0}")]
+    GbmCreateBuffer(system::Error),
+    #[error("error opening render node: {0}")]
+    OpenRenderNode(io::Error),
+    #[error("exporting prime handle to fd failed: {0}")]
+    PrimeHandleToFD(system::ErrnoError),
+}
+
+
+#[derive(Default,Debug,Copy,Clone)]
 pub struct DrmPlaneDescriptor {
     pub stride: u32,
     pub offset: u32,
 }
 
-#[derive(Default,Debug)]
+#[derive(Default,Debug,Copy,Clone)]
 pub struct DrmDescriptor {
     pub planes: [DrmPlaneDescriptor; 3]
 }
@@ -32,7 +50,7 @@ impl DrmBufferAllocator {
         })
     }
 
-    pub fn allocate(&self, width: u32, height: u32, format: u32) -> Result<(FileDesc, DrmDescriptor)> {
+    pub fn allocate(&self, width: u32, height: u32, format: u32) -> Result<(File, DrmDescriptor)> {
         const GBM_BO_USE_LINEAR: u32 = 16;
 
         let buffer = self.create_buffer(width, height, format, GBM_BO_USE_LINEAR)?;
@@ -131,7 +149,7 @@ impl DrmBuffer {
         unsafe { gbm_bo_get_stride_for_plane(self.bo, plane) }
     }
 
-    fn buffer_fd(&self) -> Result<FileDesc> {
+    fn buffer_fd(&self) -> Result<File> {
         const DRM_CLOEXEC: u32 = libc::O_CLOEXEC as u32;
         const DRM_RDWR: u32    = libc::O_RDWR as u32;
         let mut prime = DrmPrimeHandle {
@@ -143,8 +161,8 @@ impl DrmBuffer {
         unsafe {
             ioctl_with_mut_ref(self.dev.as_raw_fd(), DRM_IOCTL_PRIME_HANDLE_TO_FD, &mut prime)
                 .map_err(Error::PrimeHandleToFD)?;
+            Ok(File::from_raw_fd(prime.fd))
         }
-        Ok(FileDesc::new(prime.fd))
     }
 }
 

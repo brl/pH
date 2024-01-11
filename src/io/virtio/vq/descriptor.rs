@@ -1,6 +1,5 @@
 use std::{cmp, io};
-use std::io::Read;
-use crate::memory::GuestRam;
+use vm_memory::{Address, Bytes, GuestAddress, GuestMemory, GuestMemoryMmap, ReadVolatile};
 
 #[repr(u16)]
 enum DescriptorFlag {
@@ -83,29 +82,32 @@ impl Descriptor {
         (used != avail) && (avail == wrap_counter)
     }
 
-    pub fn read_from(&self, memory: &GuestRam, offset: usize, buf: &mut[u8]) -> usize {
+    pub fn read_from(&self, memory: &GuestMemoryMmap, offset: usize, buf: &mut[u8]) -> usize {
         let sz = cmp::min(buf.len(), self.remaining(offset));
         if sz > 0 {
-            memory.read_bytes(self.address + offset as u64, &mut buf[..sz]).unwrap();
+            let address = GuestAddress(self.address).checked_add(offset as u64).unwrap();
+            memory.read_slice(&mut buf[..sz], address).unwrap();
         }
         sz
     }
 
-    pub fn write_to(&self, memory: &GuestRam, offset: usize, buf: &[u8]) -> usize {
+    pub fn write_to(&self, memory: &GuestMemoryMmap, offset: usize, buf: &[u8]) -> usize {
         let sz = cmp::min(buf.len(), self.remaining(offset));
         if sz > 0 {
-            memory.write_bytes(self.address + offset as u64, &buf[..sz]).unwrap();
+            let address = GuestAddress(self.address).checked_add(offset as u64).unwrap();
+            memory.write_slice(&buf[..sz], address).unwrap();
         }
         sz
     }
 
-    pub fn write_from_reader<R: Read+Sized>(&self, memory: &GuestRam, offset: usize, mut r: R, size: usize) -> io::Result<usize> {
+    pub fn write_from_reader<R: ReadVolatile+Sized>(&self, memory: &GuestMemoryMmap, offset: usize, r: &mut R, size: usize) -> io::Result<usize> {
         let sz = cmp::min(size, self.remaining(offset));
         if sz > 0 {
-            let slice = memory.mut_slice(self.address + offset as u64, sz).unwrap();
-            return r.read(slice);
+            let address = GuestAddress(self.address).checked_add(offset as u64).unwrap();
+            let mut slice = memory.get_slice(address, sz).unwrap();
+            let sz = r.read_volatile(&mut slice).unwrap();
+            return Ok(sz)
         }
         Ok(0)
     }
-
 }

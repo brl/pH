@@ -13,13 +13,12 @@ use std::fmt::{Debug, Formatter};
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
+use vm_memory::{Bytes, guest_memory, GuestAddress, GuestMemoryMmap};
 use crate::audio::shm_streams::{ShmStream, ShmStreamSource};
 use crate::audio::{BoxError,  SampleFormat, StreamControl, StreamDirection};
 use crate::devices::ac97::ac97_mixer::Ac97Mixer;
 use crate::devices::ac97::ac97_regs::*;
 use crate::devices::irq_event::IrqLevelEvent;
-use crate::memory::GuestRam;
-use crate::system;
 
 const INPUT_SAMPLE_RATE: u32 = 48000;
 const DEVICE_INPUT_CHANNEL_COUNT: usize = 2;
@@ -100,7 +99,7 @@ impl Ac97BusMasterRegs {
 pub(crate) enum GuestMemoryError {
     // Failure getting the address of the audio buffer.
     #[error("Failed to get the address of the audio buffer: {0}.")]
-    ReadingGuestBufferAddress(system::Error),
+    ReadingGuestBufferAddress(guest_memory::Error),
 }
 
 #[derive(Error, Debug)]
@@ -178,7 +177,7 @@ impl AudioThreadInfo {
 /// interface compliant with the ICH bus master.
 pub struct Ac97BusMaster {
     // Keep guest memory as each function will use it for buffer descriptors.
-    mem: GuestRam,
+    mem: GuestMemoryMmap,
     regs: Arc<Mutex<Ac97BusMasterRegs>>,
     acc_sema: u8,
 
@@ -198,7 +197,7 @@ impl Ac97BusMaster {
 
     /// Creates an Ac97BusMaster` object that plays audio from `mem` to streams provided by
     /// `audio_server`.
-    pub fn new(mem: GuestRam, audio_server: AudioStreamSource) -> Self {
+    pub fn new(mem: GuestMemoryMmap, audio_server: AudioStreamSource) -> Self {
         Ac97BusMaster {
             mem,
             regs: Arc::new(Mutex::new(Ac97BusMasterRegs::new())),
@@ -597,12 +596,12 @@ impl Ac97BusMaster {
 
 fn get_buffer_samples(
     func_regs: &Ac97FunctionRegs,
-    mem: &GuestRam,
+    mem: &GuestMemoryMmap,
     index: u8,
 ) -> GuestMemoryResult<usize> {
     let descriptor_addr = func_regs.bdbar + u32::from(index) * DESCRIPTOR_LENGTH as u32;
     let control_reg: u32 = mem
-        .read_int(u64::from(descriptor_addr) + 4)
+        .read_obj(GuestAddress(u64::from(descriptor_addr) + 4))
         .map_err(GuestMemoryError::ReadingGuestBufferAddress)?;
     let buffer_samples = control_reg as usize & 0x0000_ffff;
     Ok(buffer_samples)
@@ -612,14 +611,14 @@ fn get_buffer_samples(
 // function and registers.
 fn buffer_completed(
     regs: &mut Ac97BusMasterRegs,
-    mem: &GuestRam,
+    mem: &GuestMemoryMmap,
     func: Ac97Function,
 ) -> AudioResult<()> {
     // check if the completed descriptor wanted an interrupt on completion.
     let civ = regs.func_regs(func).civ;
     let descriptor_addr = regs.func_regs(func).bdbar + u32::from(civ) * DESCRIPTOR_LENGTH as u32;
     let control_reg: u32 = mem
-        .read_int(u64::from(descriptor_addr) + 4)
+        .read_obj(GuestAddress(u64::from(descriptor_addr) + 4))
         .map_err(GuestMemoryError::ReadingGuestBufferAddress)?;
 
     let mut new_sr = regs.func_regs(func).sr & !SR_CELV;
@@ -688,7 +687,7 @@ fn update_sr(regs: &mut Ac97BusMasterRegs, func: Ac97Function, val: u16) {
 // Returns the size in samples of the buffer pointed to by the CIV register.
 fn current_buffer_size(
     func_regs: &Ac97FunctionRegs,
-    mem: &GuestRam,
+    mem: &GuestMemoryMmap,
 ) -> GuestMemoryResult<usize> {
     let civ = func_regs.civ;
     get_buffer_samples(func_regs, mem, civ)
@@ -747,12 +746,12 @@ impl Debug for GuestBuffer {
 
 fn get_buffer_address(
     func_regs: &Ac97FunctionRegs,
-    mem: &GuestRam,
+    mem: &GuestMemoryMmap,
     index: u8,
 ) -> GuestMemoryResult<u64> {
     let descriptor_addr = func_regs.bdbar + u32::from(index) * DESCRIPTOR_LENGTH as u32;
     let buffer_addr_reg: u32 = mem
-        .read_int(u64::from(descriptor_addr))
+        .read_obj(GuestAddress(u64::from(descriptor_addr)))
         .map_err(GuestMemoryError::ReadingGuestBufferAddress)?;
     let buffer_addr = (buffer_addr_reg & !0x03u32) as u64; // The address must be aligned to four bytes.
     Ok(buffer_addr)
@@ -765,7 +764,7 @@ fn get_buffer_address(
 // `civ + offset == LVI and the CELV flag is set.
 fn next_guest_buffer(
     regs: &Ac97BusMasterRegs,
-    mem: &GuestRam,
+    mem: &GuestMemoryMmap,
     func: Ac97Function,
     offset: usize,
 ) -> AudioResult<Option<GuestBuffer>> {
@@ -812,7 +811,7 @@ fn next_guest_buffer(
 struct AudioWorker {
     func: Ac97Function,
     regs: Arc<Mutex<Ac97BusMasterRegs>>,
-    mem: GuestRam,
+    mem: GuestMemoryMmap,
     thread_run: Arc<AtomicBool>,
     lvi_semaphore: Arc<Condvar>,
     message_interval: Duration,

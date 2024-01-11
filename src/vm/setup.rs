@@ -7,9 +7,9 @@ use std::{env, fs, thread};
 use crate::system::{Tap, NetlinkSocket};
 use crate::disk::DiskImage;
 use std::sync::{Arc, Barrier, Mutex};
-use crate::memory::MemoryManager;
 use std::sync::atomic::AtomicBool;
 use kvm_ioctls::VmFd;
+use vm_memory::GuestMemoryMmap;
 use vmm_sys_util::eventfd::EventFd;
 use crate::devices::ac97::Ac97Dev;
 use crate::devices::serial::SerialPort;
@@ -21,7 +21,7 @@ use crate::vm::vcpu::Vcpu;
 pub struct Vm {
     kvm_vm: KvmVm,
     vcpus: Vec<Vcpu>,
-    memory: MemoryManager,
+    memory: GuestMemoryMmap,
     io_manager: IoManager,
     termios: Option<Termios>,
 }
@@ -36,7 +36,7 @@ impl Vm {
         let memory = arch.create_memory(kvm_vm.clone())
             .map_err(Error::ArchError)?;
 
-        let io_manager = IoManager::new(memory.clone());
+        let io_manager = IoManager::new(kvm_vm.clone(), memory.clone());
 
         Ok(Vm {
             kvm_vm,
@@ -75,6 +75,10 @@ impl Vm {
         self.kvm_vm.vm_fd()
     }
 
+    pub fn guest_memory(&self) -> &GuestMemoryMmap {
+        &self.memory
+    }
+
 }
 
 pub struct VmSetup <T: ArchSetup> {
@@ -111,7 +115,7 @@ impl <T: ArchSetup> VmSetup <T> {
         if self.config.rootshell() {
             self.cmdline.push("phinit.rootshell");
         }
-        if vm.memory.drm_available() && self.config.is_dmabuf_enabled() {
+        if self.config.is_wayland_enabled() && self.config.is_dmabuf_enabled() {
             self.cmdline.push("phinit.virtwl_dmabuf");
         }
 
@@ -134,9 +138,8 @@ impl <T: ArchSetup> VmSetup <T> {
             env::set_var("HOME", "/home/citadel");
             env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
             let irq = vm.io_manager.allocator().allocate_irq();
-            let mem = vm.memory.guest_ram().clone();
             // XXX expect()
-            let ac97 = Ac97Dev::try_new(&vm.kvm_vm, irq, mem).expect("audio initialize error");
+            let ac97 = Ac97Dev::try_new(&vm.kvm_vm, irq, vm.guest_memory()).expect("audio initialize error");
             vm.io_manager.add_pci_device(Arc::new(Mutex::new(ac97)));
 
         }
@@ -162,7 +165,8 @@ impl <T: ArchSetup> VmSetup <T> {
         io_manager.add_virtio_device(VirtioRandom::new())?;
 
         if self.config.is_wayland_enabled() {
-            io_manager.add_virtio_device(VirtioWayland::new(self.config.is_dmabuf_enabled()))?;
+            let dev_shm_manager = io_manager.dev_shm_manager().clone();
+            io_manager.add_virtio_device(VirtioWayland::new(self.config.is_dmabuf_enabled(), dev_shm_manager))?;
         }
 
         let homedir = self.config.homedir();

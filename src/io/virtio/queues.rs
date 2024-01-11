@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use kvm_ioctls::{IoEventAddress, NoDatamatch};
+use vm_memory::GuestMemoryMmap;
 use vmm_sys_util::eventfd::EventFd;
-use crate::memory::MemoryManager;
 use crate::io::virtio::{Error, Result};
 use crate::io::virtio::consts::VIRTIO_MMIO_OFFSET_NOTIFY;
 use crate::io::VirtQueue;
@@ -49,17 +49,19 @@ impl InterruptLine {
 }
 
 pub struct Queues {
-    memory: MemoryManager,
+    kvm_vm: KvmVm,
+    guest_memory: GuestMemoryMmap,
     selected_queue: u16,
     queues: Vec<VirtQueue>,
     interrupt: Arc<InterruptLine>,
 }
 
 impl Queues {
-    pub fn new(memory: MemoryManager, irq: u8) -> Result<Self> {
-        let interrupt = InterruptLine::new(memory.kvm_vm(), irq)?;
+    pub fn new(kvm_vm: KvmVm, guest_memory: GuestMemoryMmap, irq: u8) -> Result<Self> {
+        let interrupt = InterruptLine::new(&kvm_vm, irq)?;
         let queues = Queues {
-            memory,
+            kvm_vm,
+            guest_memory,
             selected_queue: 0,
             queues: Vec::new(),
             interrupt: Arc::new(interrupt),
@@ -78,8 +80,12 @@ impl Queues {
         self.queues.clone()
     }
 
-    pub fn memory(&self) -> &MemoryManager {
-        &self.memory
+    pub fn guest_memory(&self) -> &GuestMemoryMmap{
+        &self.guest_memory
+    }
+
+    pub fn kvm_vm(&self) -> &KvmVm {
+        &self.kvm_vm
     }
 
     pub fn configure_queues(&self, features: u64) -> Result<()> {
@@ -113,7 +119,7 @@ impl Queues {
         let mut idx = 0;
         for &sz in queue_sizes {
             let ioevent = self.create_ioevent(idx, mmio_base)?;
-            let vq = VirtQueue::new(self.memory.guest_ram().clone(), sz, self.interrupt.clone(), ioevent);
+            let vq = VirtQueue::new(self.guest_memory.clone(), sz, self.interrupt.clone(), ioevent);
             self.queues.push(vq);
             idx += 1;
         }
@@ -130,7 +136,7 @@ impl Queues {
 
         let addr = IoEventAddress::Mmio(notify_address);
 
-        self.memory.kvm_vm().vm_fd().register_ioevent(&evt, &addr, NoDatamatch)
+        self.kvm_vm.vm_fd().register_ioevent(&evt, &addr, NoDatamatch)
             .map_err(Error::CreateIoEventFd)?;
 
         Ok(Arc::new(evt))

@@ -1,11 +1,11 @@
 use std::os::unix::io::RawFd;
 use std::{result, io};
+use std::fs::File;
 
 use thiserror::Error;
+use vm_memory::{VolatileMemoryError, VolatileSlice};
 
 use crate::system;
-use crate::memory::Error as MemError;
-use crate::system::FileDesc;
 
 mod vfd;
 mod shm;
@@ -52,18 +52,21 @@ mod consts {
 }
 
 pub use device::VirtioWayland;
+use crate::devices::virtio_wl::shm_mapper::SharedMemoryAllocation;
+use crate::io::shm_mapper;
+
 pub type Result<T> = result::Result<T, Error>;
 
 pub struct VfdRecv {
     buf: Vec<u8>,
-    fds: Option<Vec<FileDesc>>,
+    fds: Option<Vec<File>>,
 }
 
 impl VfdRecv {
     fn new(buf: Vec<u8>) -> Self {
         VfdRecv { buf, fds: None }
     }
-    fn new_with_fds(buf: Vec<u8>, fds: Vec<FileDesc>) -> Self {
+    fn new_with_fds(buf: Vec<u8>, fds: Vec<File>) -> Self {
         VfdRecv { buf, fds: Some(fds) }
     }
 }
@@ -73,11 +76,11 @@ pub trait VfdObject {
     fn send_fd(&self) -> Option<RawFd> { None }
     fn poll_fd(&self) -> Option<RawFd> { None }
     fn recv(&mut self) -> Result<Option<VfdRecv>> { Ok(None) }
-    fn send(&mut self, _data: &[u8]) -> Result<()> { Err(Error::InvalidSendVfd) }
-    fn send_with_fds(&mut self, _data: &[u8], _fds: &[RawFd]) -> Result<()> { Err(Error::InvalidSendVfd) }
+    fn send(&mut self, _data: &VolatileSlice) -> Result<()> { Err(Error::InvalidSendVfd) }
+    fn send_with_fds(&mut self, _data: &VolatileSlice, _fds: &[RawFd]) -> Result<()> { Err(Error::InvalidSendVfd) }
     fn flags(&self) -> u32;
-    fn pfn_and_size(&self) -> Option<(u64, u64)> { None }
-    fn close(&mut self) -> Result<()>;
+    fn shared_memory(&self) -> Option<SharedMemoryAllocation> { None }
+    fn close(&mut self) -> Result<()> { Ok(()) }
 }
 
 
@@ -92,9 +95,9 @@ pub enum Error {
     #[error("unexpected virtio wayland command: {0}")]
     UnexpectedCommand(u32),
     #[error("failed to allocate shared memory: {0}")]
-    ShmAllocFailed(system::Error),
-    #[error("failed to register memory with hypervisor: {0}")]
-    RegisterMemoryFailed(MemError),
+    ShmAllocFailed(shm_mapper::Error),
+    #[error("failed to free shared memory allocation: {0}")]
+    ShmFreeFailed(shm_mapper::Error),
     #[error("failed to create pipes: {0}")]
     CreatePipesFailed(system::Error),
     #[error("error reading from socket: {0}")]
@@ -105,6 +108,8 @@ pub enum Error {
     PipeReceive(io::Error),
     #[error("error writing to vfd: {0}")]
     SendVfd(io::Error),
+    #[error("error writing volatile memory to vfd: {0}")]
+    VolatileSendVfd(VolatileMemoryError),
     #[error("attempt to send to incorrect vfd type")]
     InvalidSendVfd,
     #[error("message has too many vfd ids: {0}")]
@@ -115,8 +120,4 @@ pub enum Error {
     FailedPollAdd(system::Error),
     #[error("error calling dma sync: {0}")]
     DmaSync(system::ErrnoError),
-    #[error("failed creating DMA buf: {0}")]
-    DmaBuf(MemError),
-    #[error("failed creating DMA buf: {0}")]
-    DmaBufSize(system::Error),
 }

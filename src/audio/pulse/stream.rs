@@ -2,12 +2,11 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 use pulse::sample::Spec;
 use pulse::stream::{FlagSet, SeekMode, State, Stream};
+use vm_memory::{Bytes, GuestAddress, GuestMemoryMmap};
 use crate::audio::pulse::{PulseError,Result};
 use crate::audio::pulse::context::PulseContext;
 use crate::audio::pulse::message::PulseMessageChannel;
 use crate::audio::shm_streams::{BufferSet, GenericResult, ServerRequest, ShmStream};
-use crate::memory::GuestRam;
-
 struct Available {
     byte_count: Mutex<usize>,
     cond: Condvar,
@@ -52,7 +51,7 @@ impl Available {
 pub struct PulseStream {
     spec: Spec,
     buffer_size: usize,
-    guest_ram: GuestRam,
+    guest_memory: GuestMemoryMmap,
     stream: Arc<Mutex<Stream>>,
     avail: Arc<Available>,
     channel: PulseMessageChannel,
@@ -105,7 +104,7 @@ impl PulseStream {
         result
     }
 
-    pub fn new_playback(mut stream: Stream, guest_ram: GuestRam, spec: Spec, buffer_size: usize, channel: PulseMessageChannel) -> Self {
+    pub fn new_playback(mut stream: Stream, guest_memory: GuestMemoryMmap, spec: Spec, buffer_size: usize, channel: PulseMessageChannel) -> Self {
         let avail = Arc::new(Available::new());
 
         stream.set_write_callback(Some(Box::new({
@@ -119,7 +118,7 @@ impl PulseStream {
         PulseStream {
             spec,
             buffer_size,
-            guest_ram,
+            guest_memory,
             avail,
             stream,
             channel,
@@ -166,12 +165,13 @@ impl ShmStream for PulseStream {
 impl BufferSet for PulseStream {
     fn callback(&self, address: u64, frames: usize) -> GenericResult<()> {
         self.uncork()?;
-        let bytes = self.guest_ram.slice(address, frames * self.frame_size())?;
+        let mut buffer = vec![0u8; frames * self.frame_size()];
+        self.guest_memory.read_slice(&mut buffer, GuestAddress(address))?;
 
         self.channel.send_mainloop_lock()?;
-        self.stream().write_copy(bytes, 0, SeekMode::Relative)?;
+        self.stream().write_copy(&buffer, 0, SeekMode::Relative)?;
         self.channel.send_mainloop_unlock()?;
-        self.avail.decrement(bytes.len());
+        self.avail.decrement(buffer.len());
         Ok(())
     }
 

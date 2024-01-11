@@ -1,11 +1,11 @@
 use kvm_bindings::CpuId;
 use kvm_ioctls::VcpuFd;
+use vm_memory::{Address, GuestAddress, GuestMemory, GuestMemoryMmap, GuestMemoryRegion};
 use crate::io::PciIrq;
-use crate::memory::{MemoryManager, GuestRam, SystemAllocator, AddressRange};
 use crate::vm::VmConfig;
 use crate::vm::arch::{ArchSetup, Error, PCI_MMIO_RESERVED_BASE, Result};
 use crate::vm::kernel_cmdline::KernelCmdLine;
-use crate::vm::arch::x86::memory::{x86_setup_memory_regions, x86_setup_memory, HIMEM_BASE};
+use crate::vm::arch::x86::memory::{x86_setup_memory, HIMEM_BASE};
 use crate::vm::arch::x86::cpuid::setup_cpuid;
 use crate::vm::arch::x86::registers::{setup_pm_sregs, setup_pm_regs, setup_fpu, setup_msrs};
 use crate::vm::arch::x86::interrupts::setup_lapic;
@@ -14,65 +14,52 @@ use crate::vm::kvm_vm::KvmVm;
 
 pub struct X86ArchSetup {
     ram_size: usize,
-    use_drm: bool,
     ncpus: usize,
-    memory: Option<MemoryManager>,
+    memory: Option<GuestMemoryMmap>,
 }
 
 impl X86ArchSetup {
     pub fn create(config: &VmConfig) -> Self {
         let ram_size = config.ram_size();
-        let use_drm = config.is_wayland_enabled() && config.is_dmabuf_enabled();
         X86ArchSetup {
             ram_size,
-            use_drm,
             ncpus: config.ncpus(),
             memory: None,
         }
     }
 }
 
-fn arch_memory_regions(mem_size: usize) -> Vec<(u64, usize)> {
+fn x86_memory_ranges(mem_size: usize) -> Vec<(GuestAddress, usize)> {
     match mem_size.checked_sub(PCI_MMIO_RESERVED_BASE as usize) {
-        None | Some(0) => vec![(0, mem_size)],
+        None | Some(0) => vec![(GuestAddress(0), mem_size)],
         Some(remaining) => vec![
-            (0, PCI_MMIO_RESERVED_BASE as usize),
-            (HIMEM_BASE, remaining),
+            (GuestAddress(0), PCI_MMIO_RESERVED_BASE as usize),
+            (GuestAddress(HIMEM_BASE), remaining),
         ],
     }
 }
 
-fn device_memory_start(regions: &[(u64, usize)]) -> u64 {
-    let top = regions.last().map(|&(base, size)| {
-        base + size as u64
-    }).unwrap();
-    // Put device memory at a 2MB boundary after physical memory or 4gb, whichever is greater.
-    const MB: u64 = 1 << 20;
-    const TWO_MB: u64 = 2 * MB;
-    const FOUR_GB: u64 = 4 * 1024 * MB;
-    let dev_base_round_2mb = (top + TWO_MB - 1) & !(TWO_MB - 1);
-    std::cmp::max(dev_base_round_2mb, FOUR_GB)
-}
-
 
 impl ArchSetup for X86ArchSetup {
-    fn create_memory(&mut self, kvm_vm: KvmVm) -> Result<MemoryManager> {
-        let ram = GuestRam::new(self.ram_size);
-        let regions = arch_memory_regions(self.ram_size);
-        let dev_addr_start = device_memory_start(&regions);
-
-        let dev_addr_size = u64::MAX - dev_addr_start;
-        let allocator = SystemAllocator::new(AddressRange::new(dev_addr_start,dev_addr_size as usize));
-        let mut mm = MemoryManager::new(kvm_vm, ram, allocator, self.use_drm)
+    fn create_memory(&mut self, kvm_vm: KvmVm) -> Result<GuestMemoryMmap> {
+        let ranges = x86_memory_ranges(self.ram_size);
+        let guest_memory = GuestMemoryMmap::from_ranges(&ranges)
             .map_err(Error::MemoryManagerCreate)?;
-        x86_setup_memory_regions(&mut mm, self.ram_size)?;
-        self.memory = Some(mm.clone());
-        Ok(mm)
+
+        for (i, r) in guest_memory.iter().enumerate() {
+            let slot = i as u32;
+            let guest_address = r.start_addr().raw_value();
+            let size = r.len() as usize;
+            let host_address = guest_memory.get_host_address(r.start_addr()).unwrap() as u64;
+            kvm_vm.add_memory_region(slot, guest_address, host_address, size).map_err(Error::MemoryRegister)?;
+        }
+        self.memory = Some(guest_memory.clone());
+        Ok(guest_memory)
     }
 
     fn setup_memory(&mut self, cmdline: &KernelCmdLine, pci_irqs: &[PciIrq]) -> Result<()> {
         let memory = self.memory.as_mut().expect("No memory created");
-        x86_setup_memory(memory, cmdline, self.ncpus, pci_irqs)?;
+        x86_setup_memory(self.ram_size, memory, cmdline, self.ncpus, pci_irqs)?;
         Ok(())
     }
 

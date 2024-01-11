@@ -199,9 +199,10 @@ impl <'a,'b, D: DiskImage> MessageHandler<'a,'b, D> {
                 return Ok(())
             }
             let len = nsectors << SECTOR_SHIFT;
-            let buffer = &mut current[..len];
+            let mut buffer = current.subslice(0, len)
+                .map_err(io::Error::other)?;
 
-            self.disk.read_sectors(self.sector, buffer)
+            self.disk.read_sectors(self.sector, &mut buffer)
                 .map_err(Error::DiskRead)?;
             self.chain.inc_write_offset(len);
             self.sector += nsectors as u64;
@@ -218,7 +219,7 @@ impl <'a,'b, D: DiskImage> MessageHandler<'a,'b, D> {
             if nsectors == 0 {
                 return Ok(())
             }
-            self.disk.write_sectors(self.sector, current)
+            self.disk.write_sectors(self.sector, &current)
                 .map_err(Error::DiskWrite)?;
 
             self.chain.inc_read_offset(nsectors << SECTOR_SHIFT);

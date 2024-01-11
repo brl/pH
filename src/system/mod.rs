@@ -1,15 +1,11 @@
 #[macro_use]pub mod ioctl;
 mod epoll;
-mod errno;
+pub mod errno;
 mod socket;
-mod filedesc;
-mod memfd;
 mod tap;
-//pub mod priority;
 pub mod netlink;
+pub mod drm;
 
-pub use filedesc::{FileDesc, FileFlags};
-pub use memfd::MemoryFd;
 pub use epoll::{EPoll,Event};
 pub use socket::ScmSocket;
 pub use netlink::NetlinkSocket;
@@ -19,6 +15,8 @@ use std::{result, io};
 pub use errno::Error as ErrnoError;
 
 use thiserror::Error;
+use vm_memory::guest_memory;
+use vm_memory::mmap::MmapRegionError;
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -38,6 +36,12 @@ pub enum Error {
     EventFdWrite,
     #[error("failed reading from eventfd")]
     EventFdRead,
+    #[error("guest memory error: {0}")]
+    GuestMemory(guest_memory::Error),
+    #[error("failed to allocate shared memory: {0}")]
+    ShmAllocFailed(memfd::Error),
+    #[error("failed to create mmap region: {0}")]
+    MmapRegionCreate(MmapRegionError)
 
 }
 
@@ -67,6 +71,12 @@ impl Error {
         self.inner_err()
             .map(|e| e.is_interrupted())
             .unwrap_or(false)
+    }
+}
+
+impl From<guest_memory::Error> for Error {
+    fn from(err: guest_memory::Error) -> Error {
+        Error::GuestMemory(err)
     }
 }
 

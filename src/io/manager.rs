@@ -1,14 +1,16 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 use vm_allocator::{AddressAllocator, AllocPolicy, IdAllocator, RangeInclusive};
+use vm_memory::GuestMemoryMmap;
 use vmm_sys_util::eventfd::EventFd;
 use crate::devices::rtc::Rtc;
 use crate::devices::serial::{SerialDevice, SerialPort};
 use crate::io::bus::{Bus, BusDevice};
 use crate::io::pci::{MmioHandler, PciBarAllocation, PciBus, PciDevice};
 use crate::io::{PciIrq, virtio};
+use crate::io::address::AddressRange;
+use crate::io::shm_mapper::DeviceSharedMemoryManager;
 use crate::io::virtio::{VirtioDeviceState,VirtioDevice};
-use crate::memory::{AddressRange, MemoryManager};
-use crate::vm::arch;
+use crate::vm::{arch, KvmVm};
 
 #[derive(Clone)]
 pub struct IoAllocator {
@@ -41,7 +43,9 @@ impl IoAllocator {
 
 #[derive(Clone)]
 pub struct IoManager {
-    memory: MemoryManager,
+    kvm_vm: KvmVm,
+    memory: GuestMemoryMmap,
+    dev_shm_manager: DeviceSharedMemoryManager,
     pio_bus: Bus,
     mmio_bus: Bus,
     pci_bus: Arc<Mutex<PciBus>>,
@@ -49,13 +53,18 @@ pub struct IoManager {
 }
 
 impl IoManager {
-    pub fn new(memory: MemoryManager) -> IoManager {
+    pub fn new(kvm_vm: KvmVm, memory: GuestMemoryMmap) -> IoManager {
         let pci_bus = Arc::new(Mutex::new(PciBus::new()));
         let mut pio_bus = Bus::new();
         pio_bus.insert(pci_bus.clone(), PciBus::PCI_CONFIG_ADDRESS as u64, 8)
             .expect("Failed to add PCI configuration to PIO");
+
+        let dev_shm_manager = DeviceSharedMemoryManager::new(&kvm_vm, &memory);
+
         IoManager {
+            kvm_vm,
             memory,
+            dev_shm_manager,
             pio_bus,
             mmio_bus: Bus::new(),
             pci_bus,
@@ -72,7 +81,7 @@ impl IoManager {
     }
 
     pub fn register_serial_port(&mut self, port: SerialPort) {
-        let serial = SerialDevice::new(self.memory.kvm_vm().clone(), port.irq());
+        let serial = SerialDevice::new(self.kvm_vm.clone(), port.irq());
         let serial = Arc::new(Mutex::new(serial));
         self.pio_bus.insert(serial, port.io_port() as u64, 8).unwrap();
 
@@ -135,28 +144,14 @@ impl IoManager {
     }
 
     pub fn add_virtio_device<D: VirtioDevice+'static>(&mut self, dev: D) -> virtio::Result<()> {
-        //let devtype = dev.device_type();
-        //let dev = Arc::new(Mutex::new(dev));
-        //let devstate = VirtioDeviceState::new(dev.clone(), self.memory.clone(), self.allocator.clone())?;
         let irq = self.allocator.allocate_irq();
-        //let devstate = VirtioDeviceState::new(dev, self.memory.clone(), self.allocator.clone())?;
-        let devstate = VirtioDeviceState::new(dev, self.memory.clone(), irq)?;
+        let devstate = VirtioDeviceState::new(dev, self.kvm_vm.clone(), self.memory.clone(), irq)?;
         self.add_pci_device(Arc::new(Mutex::new(devstate)));
-
-       // let mmio_range = devstate.mmio_range();
-
-        //let mut pci = self.pci_bus.lock().unwrap();
-        //pci.add_device(devstate);
-//        let mut pci_device = pci.new_device(devstate.irq() as u8, PCI_VENDOR_ID_REDHAT, devtype.device_id(), devtype.class_id());
-        // XXX add mmio bar
-        //pci_device.set_mmio_bar(0, AddressRange::new(mmio_range.start(), mmio_range.len() as usize));
-
-//        devstate.add_pci_capabilities(&mut pci_device);
-        // XXX add devstate to mmio bus
-        //self.mmio_bus.insert(Arc::new(Mutex::new(devstate)), mmio_range.start(), mmio_range.len())?;
-
-        //pci.add_device(pci_device);
         Ok(())
+    }
+
+    pub fn dev_shm_manager(&self) -> &DeviceSharedMemoryManager {
+        &self.dev_shm_manager
     }
 }
 

@@ -1,20 +1,24 @@
 use std::collections::{HashMap, VecDeque};
-use std::io::{Write, SeekFrom};
+use std::fs::File;
+use std::io;
+use std::io::{Write, SeekFrom, Seek};
 use std::os::unix::io::{AsRawFd,RawFd};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use crate::memory::{MemoryManager, DrmDescriptor};
-use crate::system::{FileDesc, FileFlags,EPoll,MemoryFd};
+use crate::system::drm::DrmDescriptor;
+use crate::system::EPoll;
 
 use crate::devices::virtio_wl::{
     consts::*, Error, Result, shm::VfdSharedMemory, pipe::VfdPipe, socket::VfdSocket, VfdObject
 };
 use crate::io::{Chain, VirtQueue};
+use crate::io::shm_mapper::DeviceSharedMemoryManager;
+use crate::system::errno::cvt;
 
 pub struct VfdManager {
     wayland_path: PathBuf,
-    mm: MemoryManager,
+    dev_shm_manager: DeviceSharedMemoryManager,
     use_transition_flags: bool,
     vfd_map: HashMap<u32, Box<dyn VfdObject>>,
     next_vfd_id: u32,
@@ -24,16 +28,12 @@ pub struct VfdManager {
 }
 
 impl VfdManager {
-    fn round_to_page_size(n: usize) -> usize {
-        let mask = 4096 - 1;
-        (n + mask) & !mask
-    }
-
-    pub fn new<P: Into<PathBuf>>(mm: MemoryManager, use_transition_flags: bool, in_vq: VirtQueue, wayland_path: P) -> Result<Self> {
+    pub fn new<P: Into<PathBuf>>(dev_shm_manager: DeviceSharedMemoryManager, use_transition_flags: bool, in_vq: VirtQueue, wayland_path: P) -> Result<Self> {
         let poll_ctx = EPoll::new().map_err(Error::FailedPollContextCreate)?;
         Ok(VfdManager {
             wayland_path: wayland_path.into(),
-            mm, use_transition_flags,
+            dev_shm_manager,
+            use_transition_flags,
             vfd_map: HashMap::new(),
             next_vfd_id: NEXT_VFD_ID_BASE,
             poll_ctx,
@@ -61,18 +61,18 @@ impl VfdManager {
         Ok(())
     }
 
-    pub fn create_shm(&mut self, vfd_id: u32, size: u32) -> Result<(u64,u64)> {
-        let shm = VfdSharedMemory::create(vfd_id, self.use_transition_flags, size, &self.mm)?;
-        let (pfn,size) = shm.pfn_and_size().unwrap();
-        self.vfd_map.insert(vfd_id, Box::new(shm));
-        Ok((pfn,size))
+    pub fn create_shm(&mut self, vfd_id: u32, size: u32) -> Result<(u64,usize)> {
+        let vfd = VfdSharedMemory::create(vfd_id, self.use_transition_flags, size, &self.dev_shm_manager)?;
+        let shm = vfd.shared_memory().unwrap();
+        self.vfd_map.insert(vfd_id, Box::new(vfd));
+        Ok((shm.pfn(),shm.size()))
     }
 
-    pub fn create_dmabuf(&mut self, vfd_id: u32, width: u32, height: u32, format: u32) -> Result<(u64, u64, DrmDescriptor)> {
-        let (vfd, desc) = VfdSharedMemory::create_dmabuf(vfd_id, self.use_transition_flags, width, height, format, &self.mm)?;
-        let (pfn, size) = vfd.pfn_and_size().unwrap();
+    pub fn create_dmabuf(&mut self, vfd_id: u32, width: u32, height: u32, format: u32) -> Result<(u64, usize, DrmDescriptor)> {
+        let vfd = VfdSharedMemory::create_dmabuf(vfd_id, self.use_transition_flags, width, height, format, &self.dev_shm_manager)?;
+        let shm = vfd.shared_memory().unwrap();
         self.vfd_map.insert(vfd_id, Box::new(vfd));
-        Ok((pfn, size, desc))
+        Ok((shm.pfn(), shm.size(), shm.drm_descriptor().unwrap()))
     }
 
     pub fn create_socket(&mut self, vfd_id: u32) -> Result<u32> {
@@ -195,30 +195,35 @@ impl VfdManager {
         Ok(())
     }
 
-    fn vfd_from_file(&self, vfd_id: u32, fd: FileDesc) -> Result<Box<dyn VfdObject>> {
-        match fd.seek(SeekFrom::End(0)) {
-            Ok(size) => {
-                let size = Self::round_to_page_size(size as usize) as u64;
-                let (pfn,slot) = self.mm.register_device_memory(fd.as_raw_fd(), size as usize)
-                    .map_err(Error::RegisterMemoryFailed)?;
+    fn vfd_from_file(&self, vfd_id: u32, fd: File) -> Result<Box<dyn VfdObject>> {
+        fn has_size(mut fd: &File) -> bool {
+            fd.seek(SeekFrom::End(0)).is_ok()
+        }
 
-                let memfd = MemoryFd::from_filedesc(fd).map_err(Error::ShmAllocFailed)?;
-                return Ok(Box::new(VfdSharedMemory::new(vfd_id, self.use_transition_flags,self.mm.clone(), memfd, slot, pfn)));
-            }
-            _ => {
-                let flags = match fd.flags() {
-                    Ok(FileFlags::Read) => VIRTIO_WL_VFD_READ,
-                    Ok(FileFlags::Write) => VIRTIO_WL_VFD_WRITE,
-                    Ok(FileFlags::ReadWrite) =>VIRTIO_WL_VFD_READ | VIRTIO_WL_VFD_WRITE,
-                    _ => 0,
-                };
-                return Ok(Box::new(VfdPipe::local_only(vfd_id, fd, flags)));
-            }
+
+        if has_size(&fd) {
+            let shm = self.dev_shm_manager.allocate_buffer_from_file(fd)
+                .map_err(Error::ShmAllocFailed)?;
+            Ok(Box::new(VfdSharedMemory::new(vfd_id, self.use_transition_flags,shm)))
+
+        } else {
+            let flags = match FileFlags::file_flags(fd.as_raw_fd()) {
+                Ok(FileFlags::Read) => VIRTIO_WL_VFD_READ,
+                Ok(FileFlags::Write) => VIRTIO_WL_VFD_WRITE,
+                Ok(FileFlags::ReadWrite) =>VIRTIO_WL_VFD_READ | VIRTIO_WL_VFD_WRITE,
+                _ => 0,
+            };
+            Ok(Box::new(VfdPipe::local_only(vfd_id, fd, flags)))
+
         }
     }
 
     pub fn close_vfd(&mut self, vfd_id: u32) -> Result<()> {
         if let Some(mut vfd) = self.vfd_map.remove(&vfd_id) {
+            if let Some(shm) = vfd.shared_memory() {
+                self.dev_shm_manager.free_buffer(shm.slot())
+                    .map_err(Error::ShmFreeFailed)?;
+            }
             vfd.close()?;
         }
         // XXX remove any matching fds from in_queue_pending
@@ -290,9 +295,9 @@ impl PendingInput {
         chain.w32(0)?;
         chain.w32(vfd.id())?;
         chain.w32(vfd.flags())?;
-        let (pfn, size) = match vfd.pfn_and_size() {
-            Some(vals) => vals,
-            None => (0,0),
+        let (pfn, size) = match vfd.shared_memory() {
+            Some(shm) => (shm.pfn(), shm.size()),
+            None => (0, 0),
         };
         chain.w64(pfn)?;
         chain.w32(size as u32)?;
@@ -319,3 +324,23 @@ impl PendingInput {
     }
 }
 
+
+#[derive(Copy,Clone,Debug,Eq,PartialEq)]
+pub enum FileFlags {
+    Read,
+    Write,
+    ReadWrite,
+}
+
+impl FileFlags {
+    fn file_flags(fd: RawFd) -> io::Result<FileFlags> {
+        let flags = unsafe { cvt(libc::fcntl(fd, libc::F_GETFL))? };
+        match flags & libc::O_ACCMODE {
+            libc::O_RDONLY => Ok(FileFlags::Read),
+            libc::O_WRONLY => Ok(FileFlags::Write),
+            libc::O_RDWR => Ok(FileFlags::ReadWrite),
+            _ => Err(io::Error::from_raw_os_error(libc::EINVAL)),
+        }
+    }
+
+}

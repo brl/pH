@@ -15,6 +15,6 @@ pub use setup::VmSetup;
 pub use kvm_vm::KvmVm;
 
 pub use self::error::{Result,Error};
-pub use arch::{ArchSetup,create_setup};
+pub use arch::ArchSetup;
 
 

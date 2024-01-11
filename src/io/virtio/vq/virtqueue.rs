@@ -1,4 +1,5 @@
 use std::sync::{Arc, Mutex, MutexGuard};
+use vm_memory::GuestMemoryMmap;
 
 use vmm_sys_util::eventfd::EventFd;
 
@@ -7,7 +8,6 @@ use crate::io::virtio::consts::MAX_QUEUE_SIZE;
 use crate::io::virtio::queues::InterruptLine;
 use crate::io::virtio::vq::chain::{Chain, DescriptorList};
 use crate::io::virtio::vq::splitqueue::SplitQueue;
-use crate::memory::GuestRam;
 
 pub trait QueueBackend: Send {
 
@@ -44,7 +44,7 @@ pub struct VirtQueue {
 impl VirtQueue {
     pub const DEFAULT_QUEUE_SIZE: u16 = 128;
 
-    pub fn new(memory: GuestRam, default_size: u16, interrupt: Arc<InterruptLine>, ioeventfd: Arc<EventFd>) -> Self {
+    pub fn new(memory: GuestMemoryMmap, default_size: u16, interrupt: Arc<InterruptLine>, ioeventfd: Arc<EventFd>) -> Self {
         let backend = Arc::new(Mutex::new(SplitQueue::new(memory, interrupt)));
         VirtQueue {
             ioeventfd,

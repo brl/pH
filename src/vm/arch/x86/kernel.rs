@@ -1,6 +1,6 @@
 use std::io;
+use vm_memory::{Bytes, GuestAddress, GuestMemoryMmap};
 
-use crate::memory::GuestRam;
 use crate::system;
 use crate::util::ByteBuffer;
 use crate::vm::arch::PCI_MMIO_RESERVED_BASE;
@@ -33,8 +33,8 @@ const KERNEL_MIN_ALIGNMENT_BYTES: u32 = 0x1000000;
 
 const E820_RAM: u32 = 1;
 
-fn setup_e820(memory: &GuestRam, mut zero: ByteBuffer<&mut [u8]>) -> system::Result<()> {
-    let ram_size = memory.ram_size() as u64;
+fn setup_e820(ram_size: usize, zero: &mut ByteBuffer<Vec<u8>>) -> system::Result<()> {
+    let ram_size = ram_size as u64;
 
     let mut e820_ranges = Vec::new();
     e820_ranges.push((0u64, EBDA_START));
@@ -56,8 +56,8 @@ fn setup_e820(memory: &GuestRam, mut zero: ByteBuffer<&mut [u8]>) -> system::Res
     Ok(())
 }
 
-fn setup_zero_page(memory: &GuestRam, cmdline_addr: u64, cmdline_size: usize) -> system::Result<()> {
-    let mut zero = memory.mut_buffer(KERNEL_ZERO_PAGE, 4096)?;
+fn setup_zero_page(ram_size: usize, memory: &GuestMemoryMmap, cmdline_addr: u64, cmdline_size: usize) -> system::Result<()> {
+    let mut zero = ByteBuffer::new(4096);
     zero.write_at(HDR_BOOT_FLAG, KERNEL_BOOT_FLAG_MAGIC)
         .write_at(HDR_HEADER, KERNEL_HDR_MAGIC)
         .write_at(HDR_TYPE_LOADER, KERNEL_LOADER_OTHER)
@@ -65,24 +65,27 @@ fn setup_zero_page(memory: &GuestRam, cmdline_addr: u64, cmdline_size: usize) ->
         .write_at(HDR_CMDLINE_SIZE, cmdline_size as u32)
         .write_at(HDR_KERNEL_ALIGNMENT, KERNEL_MIN_ALIGNMENT_BYTES);
 
-    setup_e820(memory, zero)
+    setup_e820(ram_size, &mut zero)?;
+    memory.write_slice(zero.as_ref(), GuestAddress(KERNEL_ZERO_PAGE))?;
+    Ok(())
+
 }
 
-pub fn load_pm_kernel(memory: &GuestRam, cmdline_addr: u64, cmdline_size: usize) -> system::Result<()> {
+pub fn load_pm_kernel(ram_size: usize, memory: &GuestMemoryMmap, cmdline_addr: u64, cmdline_size: usize) -> system::Result<()> {
     load_elf_kernel(memory)?;
-    setup_zero_page(memory,  cmdline_addr, cmdline_size)
+    setup_zero_page(ram_size, memory,  cmdline_addr, cmdline_size)
 }
 
-fn load_elf_segment(memory: &GuestRam, hdr: ElfPhdr) {
+fn load_elf_segment(memory: &GuestMemoryMmap, hdr: ElfPhdr) {
     let addr = hdr.p_paddr + KVM_KERNEL_LOAD_ADDRESS;
     let size = hdr.p_filesz as usize;
     let off = hdr.p_offset as usize;
-    let dst = memory.mut_slice(addr, size).unwrap();
+
     let src = &KERNEL[off..off+size];
-    dst.copy_from_slice(src);
+    memory.write_slice(src, GuestAddress(addr)).unwrap();
 }
 
-pub fn load_elf_kernel(memory: &GuestRam) -> io::Result<()> {
+pub fn load_elf_kernel(memory: &GuestMemoryMmap) -> io::Result<()> {
     let mut k = ByteBuffer::from_bytes(KERNEL);
     let phoff = k.read_at::<u64>(32);
     let phnum = k.read_at::<u16>(56);

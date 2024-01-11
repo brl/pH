@@ -1,8 +1,11 @@
-use std::io::{self,Write};
+use std::fs::File;
+use std::io;
+use std::os::fd::FromRawFd;
 use std::path::Path;
 use std::os::unix::{net::UnixStream, io::{AsRawFd, RawFd}};
+use vm_memory::{VolatileSlice, WriteVolatile};
 
-use crate::system::{FileDesc,ScmSocket};
+use crate::system::ScmSocket;
 use crate::devices::virtio_wl::{consts:: *, Error, Result, VfdObject, VfdRecv};
 
 pub struct VfdSocket {
@@ -29,14 +32,16 @@ impl VfdSocket {
             socket: Some(socket),
         })
     }
-    fn socket_recv(socket: &mut UnixStream) -> Result<(Vec<u8>, Vec<FileDesc>)> {
+    fn socket_recv(socket: &mut UnixStream) -> Result<(Vec<u8>, Vec<File>)> {
         let mut buf = vec![0; IN_BUFFER_LEN];
         let mut fd_buf = [0; VIRTWL_SEND_MAX_ALLOCS];
         let (len, fd_len) = socket.recv_with_fds(&mut buf, &mut fd_buf)
             .map_err(Error::SocketReceive)?;
         buf.truncate(len);
         let files = fd_buf[..fd_len].iter()
-            .map(|&fd| FileDesc::new(fd)).collect();
+            .map(|&fd| unsafe {
+                File::from_raw_fd(fd)
+            }).collect();
         Ok((buf, files))
     }
 }
@@ -58,27 +63,29 @@ impl VfdObject for VfdSocket {
             let (buf,files) = Self::socket_recv(&mut sock)?;
             if !(buf.is_empty() && files.is_empty()) {
                 self.socket.replace(sock);
-                if files.is_empty() {
-                    return Ok(Some(VfdRecv::new(buf)));
+                return if files.is_empty() {
+                    Ok(Some(VfdRecv::new(buf)))
                 } else {
-                    return Ok(Some(VfdRecv::new_with_fds(buf, files)));
+                    Ok(Some(VfdRecv::new_with_fds(buf, files)))
                 }
             }
         }
         Ok(None)
     }
 
-    fn send(&mut self, data: &[u8]) -> Result<()> {
+    fn send(&mut self, data: &VolatileSlice) -> Result<()> {
         if let Some(s) = self.socket.as_mut() {
-            s.write_all(data).map_err(Error::SendVfd)
+            s.write_all_volatile(data).map_err(Error::VolatileSendVfd)
         } else {
             Err(Error::InvalidSendVfd)
         }
     }
 
-    fn send_with_fds(&mut self, data: &[u8], fds: &[RawFd]) -> Result<()> {
+    fn send_with_fds(&mut self, data: &VolatileSlice, fds: &[RawFd]) -> Result<()> {
         if let Some(s) = self.socket.as_mut() {
-            s.send_with_fds(data, fds)
+            let mut buffer = vec![0u8; data.len()];
+            data.copy_to(&mut buffer);
+            s.send_with_fds(&buffer, fds)
                 .map_err(|_| Error::SendVfd(io::Error::last_os_error()))?;
             Ok(())
         } else {
@@ -98,5 +105,3 @@ impl VfdObject for VfdSocket {
         Ok(())
     }
 }
-
-

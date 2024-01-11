@@ -1,7 +1,7 @@
 use std::iter;
+use vm_memory::{Bytes, GuestAddress, GuestMemoryMmap};
 use crate::io::PciIrq;
 
-use crate::memory::GuestRam;
 use crate::system::Result;
 use crate::util::ByteBuffer;
 
@@ -201,7 +201,7 @@ fn align(sz: usize, n: usize) -> usize {
     (sz + (n - 1)) & !(n - 1)
 }
 
-pub fn setup_mptable(memory: &GuestRam, ncpus: usize, pci_irqs: &[PciIrq]) -> Result<()> {
+pub fn setup_mptable(memory: &GuestMemoryMmap, ncpus: usize, pci_irqs: &[PciIrq]) -> Result<()> {
     let ioapicid = (ncpus + 1) as u8;
     let mut buffer = Buffer::new();
     let address = MPTABLE_START;
@@ -217,5 +217,6 @@ pub fn setup_mptable(memory: &GuestRam, ncpus: usize, pci_irqs: &[PciIrq]) -> Re
         .write_mpc_lintsrc(MP_IRQ_SRC_NMI, 1)
         .write_mpc_table(MPF_INTEL_SIZE);
 
-    memory.write_bytes(address, buffer.buffer.as_ref())
+    memory.write_slice(buffer.buffer.as_ref(), GuestAddress(address))?;
+    Ok(())
 }

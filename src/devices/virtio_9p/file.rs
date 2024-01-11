@@ -5,13 +5,13 @@ use std::path::{Path, PathBuf, Component};
 use std::fs::{Metadata, File};
 use std::os::unix::io::{RawFd,AsRawFd};
 use std::os::linux::fs::MetadataExt;
-use std::os::unix::fs::FileExt;
 
 use crate::devices::virtio_9p::{
     pdu::PduParser, directory::Directory, filesystem::FileSystemOps,
 };
-use std::io::{Cursor, SeekFrom, Seek, Read};
+use std::io::{Cursor, SeekFrom, Seek};
 use std::sync::{RwLock, Arc};
+use vm_memory::{ReadVolatile, VolatileSlice, WriteVolatile};
 
 pub const P9_DOTL_RDONLY: u32        = 0o00000000;
 pub const P9_DOTL_WRONLY: u32        = 0o00000001;
@@ -59,12 +59,14 @@ impl <T: AsRef<[u8]>> Buffer <T> {
         Buffer(Arc::new(RwLock::new(Cursor::new(bytes))))
     }
 
-    pub fn read_at(&self, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+    pub fn read_at(&self, buffer: &mut VolatileSlice, offset: u64) -> io::Result<usize> {
         let mut lock = self.0.write().unwrap();
         lock.seek(SeekFrom::Start(offset))?;
-        lock.read(buffer)
+        lock.read_volatile(buffer)
+            .map_err(io::Error::other)
     }
-    pub fn write_at(&self, _buffer: &[u8], _offset: u64) -> io::Result<usize> {
+
+    pub fn write_at(&self, _buffer: &VolatileSlice, _offset: u64) -> io::Result<usize> {
         return Err(io::Error::from_raw_os_error(libc::EPERM))
     }
 
@@ -121,17 +123,31 @@ impl P9File {
         }
     }
 
-    pub fn read_at(&self, buffer: &mut [u8], offset: u64) -> io::Result<usize> {
+    pub fn read_at(&mut self, buffer: &mut VolatileSlice, offset: u64) -> io::Result<usize> {
         match self.file {
-            FileObject::File(ref f) => f.read_at(buffer,offset),
+            FileObject::File(ref mut f) => {
+                let pos = f.stream_position()?;
+                f.seek(SeekFrom::Start(offset))?;
+                let result = f.read_volatile(buffer)
+                    .map_err(io::Error::other);
+                f.seek(SeekFrom::Start(pos))?;
+                result
+            },
             FileObject::BufferFile(ref f) => f.read_at(buffer, offset),
             FileObject::NotAFile =>  Ok(0),
         }
     }
 
-    pub fn write_at(&self, buffer: &[u8], offset: u64) -> io::Result<usize> {
+    pub fn write_at(&mut self, buffer: &VolatileSlice, offset: u64) -> io::Result<usize> {
         match self.file {
-            FileObject::File(ref f) => f.write_at(buffer,offset),
+            FileObject::File(ref mut f) => {
+                let pos = f.stream_position()?;
+                f.seek(SeekFrom::Start(offset))?;
+                let result = f.write_volatile(buffer)
+                    .map_err(io::Error::other);
+                f.seek(SeekFrom::Start(pos))?;
+                result
+            },
             FileObject::BufferFile(ref f) => f.write_at(buffer, offset),
             FileObject::NotAFile =>  Ok(0),
         }
@@ -328,6 +344,11 @@ impl <T: FileSystemOps> Fids<T> {
         self.fid(id)
     }
 
+    pub fn read_fid_mut(&mut self, pp: &mut PduParser) -> io::Result<&mut Fid<T>> {
+        let id = pp.r32()?;
+        self.fid_mut(id)
+    }
+
     pub fn read_new_path(&self, pp: &mut PduParser) -> io::Result<PathBuf> {
         let fid = self.read_fid(pp)?;
         let name = pp.read_string()?;
@@ -430,6 +451,13 @@ impl <T: FileSystemOps> Fid<T> {
 
     pub fn file(&self) -> io::Result<&P9File> {
         match self.file.as_ref() {
+            Some(file) => Ok(file),
+            None => system_error(libc::EBADF),
+        }
+    }
+
+    pub fn file_mut(&mut self) -> io::Result<&mut P9File> {
+        match self.file.as_mut() {
             Some(file) => Ok(file),
             None => system_error(libc::EBADF),
         }

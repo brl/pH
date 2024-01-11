@@ -1,10 +1,11 @@
 use crate::disk::{Result, Error, DiskImage, SECTOR_SIZE, generate_disk_image_id, OpenType};
 use std::fs::{File, OpenOptions};
-use std::io::{Write, Read, SeekFrom, Seek};
+use std::io;
+use std::io::{SeekFrom, Seek};
 use crate::disk::Error::DiskRead;
 use crate::disk::memory::MemoryOverlay;
 use std::path::{PathBuf, Path};
-
+use vm_memory::{ReadVolatile, VolatileSlice, WriteVolatile};
 
 pub struct RawDiskImage {
     path: PathBuf,
@@ -94,7 +95,7 @@ impl DiskImage for RawDiskImage {
         Ok(())
     }
 
-    fn write_sectors(&mut self, start_sector: u64, buffer: &[u8]) -> Result<()> {
+    fn write_sectors(&mut self, start_sector: u64, buffer: &VolatileSlice) -> Result<()> {
         if let Some(ref mut overlay) = self.overlay {
             return overlay.write_sectors(start_sector, buffer);
         }
@@ -104,12 +105,15 @@ impl DiskImage for RawDiskImage {
         self.seek_to_sector(start_sector)?;
         let len = (buffer.len() / SECTOR_SIZE) * SECTOR_SIZE;
         let file = self.disk_file()?;
-        file.write_all(&buffer[..len])
+        let buffer = buffer.subslice(0, len)
+            .expect("Out of bounds in RawDiskImage::write_sectors()");
+        file.write_all_volatile(&buffer)
+            .map_err(io::Error::other)
             .map_err(Error::DiskWrite)?;
         Ok(())
     }
 
-    fn read_sectors(&mut self, start_sector: u64, buffer: &mut [u8]) -> Result<()> {
+    fn read_sectors(&mut self, start_sector: u64, buffer: &mut VolatileSlice) -> Result<()> {
         if let Some(mut overlay) = self.overlay.take() {
             let ret = overlay.read_sectors(self, start_sector, buffer);
             self.overlay.replace(overlay);
@@ -119,7 +123,10 @@ impl DiskImage for RawDiskImage {
         self.seek_to_sector(start_sector)?;
         let len = (buffer.len() / SECTOR_SIZE) * SECTOR_SIZE;
         let file = self.disk_file()?;
-        file.read_exact(&mut buffer[..len])
+        let mut buffer = buffer.subslice(0, len)
+            .expect("Out of bounds in RawDiskImage::read_sectors()");
+        file.read_exact_volatile(&mut buffer)
+            .map_err(io::Error::other)
             .map_err(DiskRead)?;
         Ok(())
     }

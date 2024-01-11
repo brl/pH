@@ -1,5 +1,6 @@
 use std::sync::{Arc, atomic};
 use std::sync::atomic::Ordering;
+use vm_memory::{Bytes, GuestAddress, GuestMemory, GuestMemoryMmap};
 use crate::io::virtio::Error;
 use crate::io::virtio::features::ReservedFeatureBit;
 use crate::io::virtio::queues::InterruptLine;
@@ -7,11 +8,10 @@ use crate::io::virtio::vq::chain::DescriptorList;
 use crate::io::virtio::vq::descriptor::Descriptor;
 use crate::io::virtio::vq::SharedIndex;
 use crate::io::virtio::vq::virtqueue::QueueBackend;
-use crate::memory::GuestRam;
 
 
 pub struct SplitQueue {
-    memory: GuestRam,
+    memory: GuestMemoryMmap,
     interrupt: Arc<InterruptLine>,
 
     queue_size: u16,
@@ -29,7 +29,7 @@ pub struct SplitQueue {
 }
 
 impl SplitQueue {
-    pub fn new(memory: GuestRam, interrupt: Arc<InterruptLine>) -> Self {
+    pub fn new(memory: GuestMemoryMmap, interrupt: Arc<InterruptLine>) -> Self {
         SplitQueue {
             memory,
             interrupt,
@@ -54,12 +54,12 @@ impl SplitQueue {
         }
         let head = self.descriptor_base + (idx as u64 * 16);
 
-        let addr = self.memory.read_int::<u64>(head).unwrap();
-        let len= self.memory.read_int::<u32>(head + 8).unwrap();
-        let flags = self.memory.read_int::<u16>(head + 12).unwrap();
-        let next = self.memory.read_int::<u16>(head + 14).unwrap();
+        let addr = self.memory.read_obj::<u64>(GuestAddress(head)).ok()?;
+        let len= self.memory.read_obj::<u32>(GuestAddress(head + 8)).ok()?;
+        let flags = self.memory.read_obj::<u16>(GuestAddress(head + 12)).ok()?;
+        let next = self.memory.read_obj::<u16>(GuestAddress(head + 14)).ok()?;
 
-        if self.memory.is_valid_range(addr, len as usize) && next < self.queue_size {
+        if self.memory.check_range(GuestAddress(addr), len as usize) && next < self.queue_size {
             return Some(Descriptor::new(addr, len, flags, next));
         }
         None
@@ -101,7 +101,7 @@ impl SplitQueue {
     /// Load `avail_ring.idx` from guest memory and store it in `cached_avail_idx`.
     ///
     fn load_avail_idx(&self) -> u16 {
-        let avail_idx = self.memory.read_int::<u16>(self.avail_base + 2).unwrap();
+        let avail_idx = self.memory.read_obj::<u16>(GuestAddress(self.avail_base + 2)).unwrap();
         self.cached_avail_idx.set(avail_idx);
         avail_idx
     }
@@ -112,21 +112,7 @@ impl SplitQueue {
     ///
     fn load_avail_entry(&self, ring_idx: u16) -> u16 {
         let offset = (4 + (ring_idx % self.queue_size) * 2) as u64;
-        self.memory.read_int(self.avail_base + offset).unwrap()
-    }
-
-    /// Queue is empty if `next_avail` is same value as
-    /// `avail_ring.idx` value in guest memory If `cached_avail_idx`
-    /// currently matches `next_avail` it is reloaded from
-    /// memory in case guest has updated field since last
-    /// time it was loaded.
-    ///
-    fn is_empty(&self) -> bool {
-        let next_avail = self.next_avail.get();
-        if self.cached_avail_idx.get() != next_avail {
-            return false;
-        }
-        next_avail == self.load_avail_idx()
+        self.memory.read_obj(GuestAddress(self.avail_base + offset)).unwrap()
     }
 
     ///
@@ -147,7 +133,7 @@ impl SplitQueue {
     }
 
     fn read_avail_flags(&self) -> u16 {
-        self.memory.read_int::<u16>(self.avail_base).unwrap()
+        self.memory.read_obj::<u16>(GuestAddress(self.avail_base)).unwrap()
     }
 
     ///
@@ -166,14 +152,14 @@ impl SplitQueue {
         let used_idx = (self.next_used_idx.get() % self.queue_size) as u64;
         let elem_addr = self.used_base + (4 + used_idx * 8);
         // write descriptor index to 'next used' slot in used ring
-        self.memory.write_int(elem_addr, idx as u32).unwrap();
+        self.memory.write_obj(idx as u32, GuestAddress(elem_addr)).unwrap();
         // write length to 'next used' slot in ring
-        self.memory.write_int(elem_addr + 4, len as u32).unwrap();
+        self.memory.write_obj(len, GuestAddress(elem_addr + 4)).unwrap();
 
         self.next_used_idx.inc();
         atomic::fence(Ordering::Release);
         // write updated next_used
-        self.memory.write_int(self.used_base + 2, self.next_used_idx.get()).unwrap();
+        self.memory.write_obj(self.next_used_idx.get(), GuestAddress(self.used_base + 2)).unwrap();
     }
 
     ///
@@ -187,7 +173,8 @@ impl SplitQueue {
             return;
         }
         let addr = self.used_base + 4 + (self.queue_size as u64 * 8);
-        self.memory.write_int::<u16>(addr, val).unwrap();
+        self.memory.write_obj::<u16>( val, GuestAddress(addr)).unwrap();
+
         atomic::fence(Ordering::Release);
     }
 
@@ -199,7 +186,7 @@ impl SplitQueue {
     /// Read and return the `used_event` field from the Avail ring
     fn read_used_event(&self) -> u16 {
         let addr = self.avail_base + 4 + (self.queue_size as u64  * 2);
-        self.memory.read_int::<u16>(addr).unwrap()
+        self.memory.read_obj::<u16>(GuestAddress(addr)).unwrap()
     }
 
     fn need_interrupt(&self, first_used: u16) -> bool {
@@ -217,13 +204,13 @@ impl QueueBackend for SplitQueue {
         let avail_ring_sz = 6 + 2 * size as usize;
         let used_ring_sz = 6 + 8 * size as usize;
 
-        if !self.memory.is_valid_range(descriptor_area, desc_table_sz) {
+        if !self.memory.check_range(GuestAddress(descriptor_area), desc_table_sz) {
             return Err(Error::RangeInvalid(descriptor_area));
         }
-        if !self.memory.is_valid_range(driver_area, avail_ring_sz) {
+        if !self.memory.check_range(GuestAddress(driver_area), avail_ring_sz) {
             return Err(Error::AvailInvalid(driver_area));
         }
-        if !self.memory.is_valid_range(device_area, used_ring_sz) {
+        if !self.memory.check_range(GuestAddress(device_area), used_ring_sz) {
             return Err(Error::UsedInvalid(device_area));
         }
 

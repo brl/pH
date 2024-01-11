@@ -1,27 +1,30 @@
 use std::sync::mpsc;
 use std::thread;
 use pulse::sample::{Format, Spec};
+use vm_memory::GuestMemoryMmap;
 use crate::audio::pulse::context::PulseContext;
 use crate::audio::pulse::message::PulseMessageChannel;
 use crate::audio::pulse::Result;
 use crate::audio::{SampleFormat, StreamDirection};
 use crate::audio::shm_streams::{GenericResult, NullShmStream, ShmStream, ShmStreamSource};
-use crate::memory::GuestRam;
 
 pub struct PulseClient {
     channel: PulseMessageChannel,
 }
 
 impl PulseClient {
-    pub fn connect(guest_ram: GuestRam) -> Result<Self> {
+    pub fn connect(guest_memory: &GuestMemoryMmap) -> Result<Self> {
         let (tx,rx) = mpsc::channel();
 
-        let _ = thread::spawn(move || {
-            let mut ctx = PulseContext::new(guest_ram);
-            if let Err(err) = ctx.connect() {
-                warn!("PulseAudio Error: {}", err);
-            } else {
-                ctx.run(rx);
+        let _ = thread::spawn({
+            let guest_memory = guest_memory.clone();
+            move || {
+                let mut ctx = PulseContext::new(guest_memory);
+                if let Err(err) = ctx.connect() {
+                    warn!("PulseAudio Error: {}", err);
+                } else {
+                    ctx.run(rx);
+                }
             }
         });
         Ok(PulseClient {

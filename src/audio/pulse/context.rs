@@ -7,12 +7,12 @@ use pulse::mainloop::threaded::Mainloop;
 use pulse::proplist::{properties, Proplist};
 use pulse::sample::Spec;
 use pulse::stream::Stream;
-use crate::memory::GuestRam;
+use vm_memory::GuestMemoryMmap;
 use crate::audio::pulse::{Result, PulseError, PulseStream};
 use crate::audio::pulse::message::{PulseContextMessage, PulseContextRequest, PulseMessageChannel};
 
 pub struct PulseContext {
-    guest_ram: GuestRam,
+    guest_memory: GuestMemoryMmap,
     mainloop: Rc<RefCell<Mainloop>>,
     context: Rc<RefCell<Context>>,
 }
@@ -34,7 +34,7 @@ impl PulseContext {
         self.mainloop.clone()
     }
 
-    pub fn new(guest_ram: GuestRam) -> Self {
+    pub fn new(guest_memory: GuestMemoryMmap) -> Self {
         let mainloop = Mainloop::new()
             .expect("Failed to create a pulseaudio mainloop");
 
@@ -51,7 +51,7 @@ impl PulseContext {
         ).expect("Failed to create a pulseaudio context");
 
         PulseContext {
-            guest_ram,
+            guest_memory,
             mainloop: Rc::new(RefCell::new(mainloop)),
             context: Rc::new(RefCell::new(context)),
         }
@@ -111,7 +111,7 @@ impl PulseContext {
                                                    None)
                 .expect("Failed to create pulseaudio stream");
 
-        let ps = PulseStream::new_playback(stream, self.guest_ram.clone(), spec, buffer_size, channel);
+        let ps = PulseStream::new_playback(stream, self.guest_memory.clone(), spec, buffer_size, channel);
         self.mainloop_unlock();
         ps
     }

@@ -5,13 +5,13 @@
 use std::io;
 
 use thiserror::Error;
+use vm_memory::GuestMemoryMmap;
 use crate::audio::pulse::{PulseClient, PulseError};
 use crate::devices::ac97::ac97_bus_master::{Ac97BusMaster, AudioStreamSource};
 use crate::devices::ac97::ac97_mixer::Ac97Mixer;
 use crate::devices::ac97::ac97_regs::{MASTER_REGS_SIZE, MIXER_REGS_SIZE};
 use crate::devices::irq_event::IrqLevelEvent;
 use crate::io::pci::{PciBar, PciBarAllocation, PciConfiguration, PciDevice};
-use crate::memory::GuestRam;
 use crate::vm::KvmVm;
 
 
@@ -48,7 +48,7 @@ impl Ac97Dev {
     /// default values.
     pub fn new(
         irq: u8,
-        mem: GuestRam,
+        mem: &GuestMemoryMmap,
         audio_server: AudioStreamSource,
     ) -> Self {
         let pci_config = PciConfiguration::new(irq, PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_INTEL_82801AA_5, PCI_CLASS_MULTIMEDIA_AUDIO);
@@ -57,7 +57,7 @@ impl Ac97Dev {
             irq,
             pci_config,
             bus_master: Ac97BusMaster::new(
-                mem,
+                mem.clone(),
                 audio_server,
             ),
             mixer: Ac97Mixer::new(),
@@ -69,7 +69,7 @@ impl Ac97Dev {
     pub fn try_new(
         kvm_vm: &KvmVm,
         irq: u8,
-        mem: GuestRam,
+        mem: &GuestMemoryMmap,
     ) -> Result<Self, Ac97Error> {
         let mut ac97 = Self::initialize_pulseaudio(irq, mem)?;
         let irq_event = IrqLevelEvent::register(kvm_vm, irq)
@@ -78,8 +78,8 @@ impl Ac97Dev {
         Ok(ac97)
     }
 
-    fn initialize_pulseaudio(irq: u8, mem: GuestRam) -> Result<Self, Ac97Error> {
-        let server = PulseClient::connect(mem.clone())
+    fn initialize_pulseaudio(irq: u8, mem: &GuestMemoryMmap) -> Result<Self, Ac97Error> {
+        let server = PulseClient::connect(mem)
             .map_err(Ac97Error::PulseError)?;
         Ok(Self::new(
             irq,

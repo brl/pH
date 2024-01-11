@@ -5,7 +5,6 @@ mod system;
 #[macro_use]
 pub mod util;
 mod vm;
-mod memory;
 mod devices;
 mod disk;
 mod io;

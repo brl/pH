@@ -4,16 +4,16 @@ use std::ffi::OsStr;
 
 use libc;
 use byteorder::{LittleEndian,ReadBytesExt,WriteBytesExt};
+use vm_memory::{Bytes, GuestAddress, GuestMemoryMmap};
 
 use crate::devices::virtio_9p::file::Qid;
 use crate::io::Chain;
-use crate::memory::GuestRam;
 
 const P9_HEADER_LEN: usize = 7;
 const P9_RLERROR: u8 = 7;
 
 pub struct PduParser<'a> {
-    memory: GuestRam,
+    memory: GuestMemoryMmap,
     pub chain: &'a mut Chain,
 
     size: u32,
@@ -107,7 +107,7 @@ impl P9Attr {
 }
 
 impl <'a> PduParser<'a> {
-    pub fn new(chain: &'a mut Chain, memory: GuestRam) -> PduParser<'a> {
+    pub fn new(chain: &'a mut Chain, memory: GuestMemoryMmap) -> PduParser<'a> {
         PduParser{ memory, chain, size: 0, cmd: 0, tag: 0, reply_start_addr: 0 }
     }
 
@@ -180,7 +180,7 @@ impl <'a> PduParser<'a> {
     }
 
     pub fn _w8_at(&self, offset: usize, val: u8) {
-        self.memory.write_int::<u8>(self.reply_start_addr + offset as u64,  val).unwrap();
+        self.memory.write_obj::<u8>(val, GuestAddress(self.reply_start_addr + offset as u64)).unwrap();
     }
 
     #[allow(dead_code)]
@@ -189,7 +189,7 @@ impl <'a> PduParser<'a> {
     }
 
     pub fn _w16_at(&self, offset: usize, val: u16) {
-        self.memory.write_int::<u16>(self.reply_start_addr + offset as u64,  val).unwrap();
+        self.memory.write_obj::<u16>(val, GuestAddress(self.reply_start_addr + offset as u64)).unwrap();
     }
 
     pub fn w32_at(&self, offset: usize, val: u32) {
@@ -197,7 +197,7 @@ impl <'a> PduParser<'a> {
     }
 
     pub fn _w32_at(&self, offset: usize, val: u32) {
-        self.memory.write_int::<u32>(self.reply_start_addr + offset as u64,  val).unwrap();
+        self.memory.write_obj::<u32>(val, GuestAddress(self.reply_start_addr + offset as u64)).unwrap();
     }
 
     pub fn write_done(&mut self) -> io::Result<()> {

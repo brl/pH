@@ -3,8 +3,6 @@ use std::fs::File;
 use std::os::linux::fs::MetadataExt;
 use std::io::{SeekFrom, Seek};
 
-use crate::system;
-
 mod realmfs;
 mod raw;
 mod memory;
@@ -13,6 +11,7 @@ pub use raw::RawDiskImage;
 pub use realmfs::RealmFSImage;
 use std::path::PathBuf;
 use thiserror::Error;
+use vm_memory::VolatileSlice;
 
 const SECTOR_SIZE: usize = 512;
 
@@ -39,8 +38,8 @@ pub trait DiskImage: Sync+Send {
             .map_err(Error::DiskSeek)?;
         Ok(())
     }
-    fn write_sectors(&mut self, start_sector: u64, buffer: &[u8]) -> Result<()>;
-    fn read_sectors(&mut self, start_sector: u64, buffer: &mut [u8]) -> Result<()>;
+    fn write_sectors(&mut self, start_sector: u64, buffer: &VolatileSlice) -> Result<()>;
+    fn read_sectors(&mut self, start_sector: u64, buffer: &mut VolatileSlice) -> Result<()>;
     fn flush(&mut self) -> Result<()> { Ok(()) }
 
     fn disk_image_id(&self) -> &[u8];
@@ -79,7 +78,7 @@ pub enum Error {
     #[error("attempt to access invalid sector offset {0}")]
     BadSectorOffset(u64),
     #[error("failed to create memory overlay: {0}")]
-    MemoryOverlayCreate(system::Error),
+    MemoryOverlayCreate(memfd::Error),
     #[error("disk not open")]
     NotOpen,
 }

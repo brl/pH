@@ -1,12 +1,12 @@
 use std::{fmt, io};
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
+use vm_memory::{GuestAddress, GuestMemory, GuestMemoryMmap, ReadVolatile, VolatileSlice};
 use crate::io::virtio::vq::descriptor::Descriptor;
 use crate::io::virtio::vq::virtqueue::QueueBackend;
-use crate::memory::GuestRam;
 
 pub struct DescriptorList {
-    memory: GuestRam,
+    memory: GuestMemoryMmap,
     descriptors: Vec<Descriptor>,
     offset: usize,
     total_size: usize,
@@ -14,7 +14,7 @@ pub struct DescriptorList {
 }
 
 impl DescriptorList {
-    pub fn new(memory: GuestRam) -> Self {
+    pub fn new(memory: GuestMemoryMmap) -> Self {
         DescriptorList {
             memory,
             descriptors: Vec::new(),
@@ -96,8 +96,8 @@ impl DescriptorList {
         0
     }
 
-    fn write_from_reader<R>(&mut self, reader: R, size: usize) -> io::Result<usize>
-        where R: Read+Sized
+    fn write_from_reader<R>(&mut self, reader: &mut R, size: usize) -> io::Result<usize>
+        where R: ReadVolatile+Sized
     {
         if let Some(d) = self.current() {
             let n = d.write_from_reader(&self.memory, self.offset, reader, size)?;
@@ -108,23 +108,20 @@ impl DescriptorList {
         }
     }
 
-    fn current_slice(&self) -> &[u8] {
-        if let Some(d) = self.current() {
-            let size = d.remaining(self.offset);
-            let addr = d.address() + self.offset as u64;
-            self.memory.slice(addr, size).unwrap_or(&[])
-        } else {
-            &[]
+    fn empty_slice() -> VolatileSlice<'static> {
+        unsafe {
+            VolatileSlice::new(0 as *mut u8, 0)
         }
     }
 
-    fn current_mut_slice(&self) -> &mut [u8] {
+    fn current_slice(&self) -> VolatileSlice {
         if let Some(d) = self.current() {
             let size = d.remaining(self.offset);
             let addr = d.address() + self.offset as u64;
-            self.memory.mut_slice(addr, size).unwrap_or(&mut [])
+            self.memory.get_slice(GuestAddress(addr), size)
+                .unwrap_or(Self::empty_slice())
         } else {
-            &mut []
+            Self::empty_slice()
         }
     }
 
@@ -224,7 +221,7 @@ impl Chain {
         self.readable.is_empty() && self.writeable.is_empty()
     }
 
-    pub fn current_read_slice(&self) -> &[u8] {
+    pub fn current_read_slice(&self) -> VolatileSlice {
         self.readable.current_slice()
     }
 
@@ -239,12 +236,12 @@ impl Chain {
         self.writeable.inc(sz);
     }
 
-    pub fn current_write_slice(&mut self) -> &mut [u8] {
-        self.writeable.current_mut_slice()
+    pub fn current_write_slice(&mut self) -> VolatileSlice {
+        self.writeable.current_slice()
     }
 
-    pub fn copy_from_reader<R>(&mut self, r: R, size: usize) -> io::Result<usize>
-        where R: Read+Sized
+    pub fn copy_from_reader<R>(&mut self, r: &mut R, size: usize) -> io::Result<usize>
+        where R: ReadVolatile+Sized
     {
         self.writeable.write_from_reader(r, size)
     }

@@ -16,12 +16,12 @@ impl VirtioRandom {
 }
 
 fn run(q: VirtQueue) {
-    let random = File::open("/dev/urandom").unwrap();
+    let mut random = File::open("/dev/urandom").unwrap();
 
     loop {
         q.on_each_chain(|mut chain| {
             while !chain.is_end_of_chain() {
-                let _ = chain.copy_from_reader(&random, 256).unwrap();
+                let _ = chain.copy_from_reader(&mut random, 256).unwrap();
             }
         });
     }

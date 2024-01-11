@@ -1,7 +1,7 @@
 use kvm_bindings::CpuId;
 use kvm_ioctls::VcpuFd;
+use vm_memory::GuestMemoryMmap;
 pub use crate::vm::arch::x86::X86ArchSetup;
-use crate::memory::MemoryManager;
 
 mod error;
 mod x86;
@@ -20,7 +20,7 @@ pub fn create_setup(config: &VmConfig) -> X86ArchSetup {
 }
 
 pub trait ArchSetup {
-    fn create_memory(&mut self, kvm_vm: KvmVm) -> Result<MemoryManager>;
+    fn create_memory(&mut self, kvm_vm: KvmVm) -> Result<GuestMemoryMmap>;
     fn setup_memory(&mut self, cmdline: &KernelCmdLine, pci_irqs: &[PciIrq]) -> Result<()>;
     fn setup_vcpu(&self, vcpu: &VcpuFd, cpuid: CpuId) -> Result<()>;
 }

@@ -633,8 +633,8 @@ impl <T: FileSystemOps> Server<T> {
         pp.write_done()
     }
 
-    fn p9_read_args(&self, pp: &mut PduParser) -> io::Result<(&Fid<T>, u64, u32)> {
-        let fid = self.read_fid(pp)?;
+    fn p9_read_args(&mut self, pp: &mut PduParser) -> io::Result<(&mut Fid<T>, u64, u32)> {
+        let fid = self.fids.read_fid_mut(pp)?;
         let offset = pp.r64()?;
         let count = pp.r32()?;
         pp.read_done()?;
@@ -642,13 +642,14 @@ impl <T: FileSystemOps> Server<T> {
     }
 
     fn p9_read(&mut self, pp: &mut PduParser) -> io::Result<()> {
+        let debug = self.debug;
         let (fid, offset, count) = self.p9_read_args(pp)?;
 
-        if self.debug {
+        if debug {
             notify!("p9_read({}, offset={}, count={})", fid, offset, count);
         }
 
-        let file = fid.file()?;
+        let file = fid.file_mut()?;
         // space for size field
         pp.w32(0)?;
 
@@ -660,7 +661,8 @@ impl <T: FileSystemOps> Server<T> {
                 break;
             }
             let rlen = cmp::min(current.len(), count as usize);
-            let n = file.read_at(&mut current[..rlen], offset + nread as u64)?;
+            let mut subslice = current.subslice(0, rlen).map_err(io::Error::other)?;
+            let n = file.read_at(&mut subslice, offset + nread as u64)?;
             if n == 0 {
                 break;
             }
@@ -671,24 +673,26 @@ impl <T: FileSystemOps> Server<T> {
         pp.write_done()
     }
 
-    fn p9_write_args(&self, pp: &mut PduParser) -> io::Result<(&Fid<T>, u64, u32)> {
-        let fid = self.read_fid(pp)?;
+    fn p9_write_args(&mut self, pp: &mut PduParser) -> io::Result<(&mut Fid<T>, u64, u32)> {
+        let fid = self.fids.read_fid_mut(pp)?;
         let offset = pp.r64()?;
         let count = pp.r32()?;
         Ok((fid, offset, count))
     }
 
     fn p9_write(&mut self, pp: &mut PduParser) -> io::Result<()> {
+        let debug = self.debug;
         let (fid, offset, count) = self.p9_write_args(pp)?;
 
-        if self.debug {
+        if debug {
             notify!("p9_write({}, offset={}, count={})", fid, offset, count);
         }
 
-        let file = fid.file()?;
+        let file = fid.file_mut()?;
         let mut nread = 0;
         while nread < count {
-            let n = file.write_at(pp.chain.current_read_slice(), offset + nread as u64)?;
+            let buffer = pp.chain.current_read_slice();
+            let n = file.write_at(&buffer, offset + nread as u64)?;
             if n == 0 {
                 break;
             }
